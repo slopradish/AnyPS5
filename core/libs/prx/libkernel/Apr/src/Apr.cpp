@@ -1,5 +1,3 @@
-#include "prx/libkernel/include/Api.hpp"
-#include "prx/libc/include/Api.hpp"
 #include <algorithm>
 #include <optional>
 #include <deque>
@@ -12,9 +10,9 @@
 #include "prx/libc/include/PreciseWait.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libkernel/Apr/include/AprCommandBuffer.hpp"
-#include "prx/libkernel/Apr/include/AmmPool.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
 #include "prx/libkernel/File/include/NativeStat.hpp"
+#include "prx/libkernel/File/include/CompressedFile.hpp"
 #include "prx/libkernel/Equeue/Equeue.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
 #include <array>
@@ -38,10 +36,11 @@
 #include <windows.h>
 #endif
 
+extern "C" int* APS5_VABI __error_nid_postfix();
+
 namespace {
 
 constexpr int GUEST_ENOENT = 2;
-constexpr int GUEST_EFAULT = 14;
 constexpr int GUEST_EINVAL = 22;
 
 struct AprFile {
@@ -66,6 +65,12 @@ std::string _foldCase(std::string text) {
     return text;
 }
 
+// The size the guest sees: a GDEF container's uncompressed size (its header), the host size else.
+std::uint64_t _guestSize(const std::filesystem::path& path, std::uint64_t hostBytes) {
+    if (hostBytes < 20) return hostBytes;
+    return CompressedFile::UncompressedSize(path).value_or(hostBytes);
+}
+
 bool _fileSize(const std::filesystem::path& path, std::uint64_t& bytes) {
     {
         std::lock_guard lock(g_directoriesLock);
@@ -81,7 +86,7 @@ bool _fileSize(const std::filesystem::path& path, std::uint64_t& bytes) {
                 do {
                     if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) continue;
                     const auto size = (static_cast<std::uint64_t>(entry.nFileSizeHigh) << 32u) | entry.nFileSizeLow;
-                    sizes.emplace(_foldCase(std::filesystem::path(entry.cFileName).string()), size);
+                    sizes.emplace(_foldCase(std::filesystem::path(entry.cFileName).string()), _guestSize(path.parent_path() / entry.cFileName, size));
                 } while (FindNextFileW(find, &entry));
                 FindClose(find);
             }
@@ -91,7 +96,7 @@ bool _fileSize(const std::filesystem::path& path, std::uint64_t& bytes) {
                 std::error_code entryError;
                 if (!it->is_regular_file(entryError)) continue;
                 const auto size = it->file_size(entryError);
-                if (!entryError) sizes.emplace(_foldCase(it->path().filename().string()), size);
+                if (!entryError) sizes.emplace(_foldCase(it->path().filename().string()), _guestSize(it->path(), size));
             }
 #endif
             listed = g_directories.emplace(directory, std::move(sizes)).first;
@@ -106,7 +111,7 @@ bool _fileSize(const std::filesystem::path& path, std::uint64_t& bytes) {
     if (!std::filesystem::is_regular_file(path, error)) return false;
     FileStat stat{};
     File::FillFileStat(path, &stat);
-    bytes = static_cast<std::uint64_t>(stat.st_size);
+    bytes = _guestSize(path, static_cast<std::uint64_t>(stat.st_size));
     return true;
 }
 
@@ -158,33 +163,106 @@ int _resolveForEach(const char* prefix, const char** paths, uint32_t count, uint
     return static_cast<int>(resolvedCount);
 }
 
+// Host handles of resolved files, opened on first read and kept: titles stream thousands of small
+// reads (Wolverine ~16000 at startup), and opening the file for each took ~8 ms, minutes in all.
+// Reads are positional, so the queues' workers share a handle.
+#ifdef _WIN32
+using HostFile = HANDLE;
+const HostFile NoHostFile = INVALID_HANDLE_VALUE;
+#else
+using HostFile = int;
+constexpr HostFile NoHostFile = -1;
+#endif
+std::mutex& g_handlesLock = *new std::mutex();
+std::vector<HostFile>& g_handles = *new std::vector<HostFile>();
+
+HostFile _hostFile(std::uint32_t id, const AprFile& file) {
+    std::lock_guard lock(g_handlesLock);
+    if (id < g_handles.size() && g_handles[id] != NoHostFile) return g_handles[id];
+#ifdef _WIN32
+    const HostFile handle = CreateFileW(file.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+#else
+    const HostFile handle = open(file.path.c_str(), O_RDONLY | O_CLOEXEC);
+#endif
+    if (handle == NoHostFile) throw std::runtime_error("APR: cannot open " + file.path.string());
+    if (g_handles.size() <= id) g_handles.resize(id + 1, NoHostFile);
+    g_handles[id] = handle;
+    return handle;
+}
+
+// Reads `bytes` at `offset` into `destination`; returns the bytes read (fewer at the end of the file).
+// On Windows the bytes go through a host buffer and are copied in user mode, so demand-committed
+// guest pages fault in through the process (ReadFile cannot fill them; upstream f7953ecac).
+std::uint64_t _readAt(HostFile handle, std::uint64_t offset, std::uint8_t* destination, std::uint64_t bytes) {
+    std::uint64_t done = 0;
+#ifdef _WIN32
+    std::array<std::uint8_t, 64u * 1024u> staging;
+#endif
+    while (done < bytes) {
+#ifdef _WIN32
+        const auto chunk = static_cast<DWORD>(std::min<std::uint64_t>(bytes - done, staging.size()));
+        OVERLAPPED at{};
+        at.Offset = static_cast<DWORD>(offset + done);
+        at.OffsetHigh = static_cast<DWORD>((offset + done) >> 32u);
+        DWORD read = 0;
+        if (!ReadFile(handle, staging.data(), chunk, &read, &at) && GetLastError() != ERROR_HANDLE_EOF) throw std::runtime_error("APR: ReadFile failed with error " + std::to_string(GetLastError()));
+        if (read != 0) std::memcpy(destination + done, staging.data(), read);
+#else
+        const auto chunk = static_cast<std::uint32_t>(std::min<std::uint64_t>(bytes - done, 1u << 30u));
+        const auto read = pread(handle, destination + done, chunk, static_cast<off_t>(offset + done));
+        if (read < 0) throw std::runtime_error("APR: pread failed with errno " + std::to_string(errno));
+#endif
+        if (read == 0) break;
+        done += static_cast<std::uint64_t>(read);
+    }
+    return done;
+}
+
+// A file's GDEF index (null for an ordinary file), probed on its first read and kept like its handle.
+std::mutex& g_compressedLock = *new std::mutex();
+std::vector<std::optional<std::shared_ptr<const CompressedFile::Index>>>& g_compressed = *new std::vector<std::optional<std::shared_ptr<const CompressedFile::Index>>>();
+
+std::shared_ptr<const CompressedFile::Index> _compressed(std::uint32_t id, const AprFile& file, HostFile handle) {
+    {
+        std::lock_guard lock(g_compressedLock);
+        if (id < g_compressed.size() && g_compressed[id].has_value()) return *g_compressed[id];
+    }
+#ifdef _WIN32
+    LARGE_INTEGER hostSize{};
+    if (!GetFileSizeEx(handle, &hostSize)) throw std::runtime_error("APR: cannot size " + file.path.string());
+    const auto hostBytes = static_cast<std::uint64_t>(hostSize.QuadPart);
+#else
+    struct stat hostStat {};
+    if (fstat(handle, &hostStat) != 0) throw std::runtime_error("APR: cannot size " + file.path.string());
+    const auto hostBytes = static_cast<std::uint64_t>(hostStat.st_size);
+#endif
+    const CompressedFile::RawRead read = [handle](std::uint64_t offset, void* destination, std::size_t bytes) { return _readAt(handle, offset, static_cast<std::uint8_t*>(destination), bytes) == bytes; };
+    auto index = CompressedFile::Probe(file.path.string(), hostBytes, read);
+    std::lock_guard lock(g_compressedLock);
+    if (g_compressed.size() <= id) g_compressed.resize(id + 1);
+    g_compressed[id] = index;
+    return index;
+}
+
 void _readFile(const Apr::ReadFileCommand& command) {
     const auto file = _file(command.fileId);
     static const bool trace = std::getenv("APS5_TRACE_APR") != nullptr;
     if (trace) std::fprintf(stderr, "[apr] read %s offset=0x%llx size=0x%llx -> 0x%llx\n", file.path.string().c_str(), static_cast<unsigned long long>(command.offset), static_cast<unsigned long long>(command.size), static_cast<unsigned long long>(command.destination));
-    std::ifstream stream(file.path, std::ios::binary);
-    if (!stream) throw std::runtime_error("APR: cannot open " + file.path.string());
-    stream.seekg(static_cast<std::streamoff>(command.offset));
+    const auto handle = _hostFile(command.fileId, file);
     const GuestArena::HostWrite destination(reinterpret_cast<void*>(command.destination), command.size);
     if (!destination.Open()) throw std::runtime_error("APR: the read destination of " + file.path.string() + " is not writable guest memory");
-#ifdef _WIN32
-    std::vector<char> staging(static_cast<std::size_t>(std::min<std::uint64_t>(command.size, 64u * 1024u)));
     std::uint64_t read = 0;
-    while (read < command.size) {
-        const auto wanted = static_cast<std::streamsize>(std::min<std::uint64_t>(command.size - read, staging.size()));
-        stream.read(staging.data(), wanted);
-        const auto obtained = static_cast<std::uint64_t>(stream.gcount());
-        if (obtained != 0) std::memcpy(reinterpret_cast<char*>(command.destination) + read, staging.data(), static_cast<std::size_t>(obtained));
-        read += obtained;
-        if (stream.bad()) throw std::runtime_error("APR: read failed for " + file.path.string());
-        if (obtained != static_cast<std::uint64_t>(wanted)) break;
+    std::uint64_t fileBytes = 0;
+    if (const auto compressed = _compressed(command.fileId, file, handle)) {
+        fileBytes = compressed->uncompressedBytes;
+        read = command.offset < fileBytes ? std::min<std::uint64_t>(command.size, fileBytes - command.offset) : 0;
+        const CompressedFile::RawRead raw = [handle](std::uint64_t offset, void* target, std::size_t bytes) { return _readAt(handle, offset, static_cast<std::uint8_t*>(target), bytes) == bytes; };
+        if (read != 0) CompressedFile::Read(*compressed, raw, command.offset, reinterpret_cast<void*>(command.destination), static_cast<std::size_t>(read));
+    } else {
+        read = _readAt(handle, command.offset, reinterpret_cast<std::uint8_t*>(command.destination), command.size);
+        if (read != command.size) fileBytes = std::filesystem::file_size(file.path);
     }
-#else
-    stream.read(reinterpret_cast<char*>(command.destination), static_cast<std::streamsize>(command.size));
-    if (stream.bad()) throw std::runtime_error("APR: read failed for " + file.path.string());
-    const auto read = static_cast<std::uint64_t>(stream.gcount());
-#endif
-    if (read != command.size && (!stream.eof() || command.offset + read < std::filesystem::file_size(file.path))) throw std::runtime_error("APR: read of " + file.path.string() + " at offset " + std::to_string(command.offset) + " returned " + std::to_string(read) + " of " + std::to_string(command.size) + " bytes");
+    if (read != command.size && command.offset + read < fileBytes) throw std::runtime_error("APR: read of " + file.path.string() + " at offset " + std::to_string(command.offset) + " returned " + std::to_string(read) + " of " + std::to_string(command.size) + " bytes");
     if (read != command.size) std::memset(reinterpret_cast<char*>(command.destination) + read, 0, static_cast<std::size_t>(command.size - read));
 }
 
@@ -283,14 +361,21 @@ constexpr std::uint64_t AmmRangeAlignment = 64ull << 30;
 constexpr int GuestMapFixed = 0x10;
 constexpr int GuestMapNoOverwrite = 0x80;
 
-static_assert(AmmPool::PageBytes == PS5_PAGE_SIZE);
+struct AmmPage {
+    std::uint64_t physical;
+    std::int32_t type;
+    std::int32_t protection;
+    bool pooled;
+};
 
-using AmmPage = AmmPool::Page;
-
-struct AmmState : AmmPool::Records {
+struct AmmState {
     std::mutex lock;
     std::uintptr_t base = 0;
+    std::map<std::uint64_t, std::uint64_t> pool;
+    std::map<std::uintptr_t, AmmPage> pages;
+    std::map<std::uint64_t, std::uint32_t> pooledUses;
     std::set<std::uintptr_t> prt;
+    std::atomic<std::uint32_t> lastSubmit{0};
 };
 
 AmmState& _amm() {
@@ -327,50 +412,36 @@ int _ammHostProtection(std::int32_t protection) {
 }
 
 void _returnPoolPages(AmmState& state, std::uint64_t offset, std::uint64_t bytes) {
-    AmmPool::ReturnPages(state, offset, bytes);
-}
-
-bool _tryTakePoolPages(AmmState& state, std::uint64_t bytes, std::uint64_t& offset) {
-    for (auto it = state.pool.begin(); it != state.pool.end(); ++it) {
-        if (it->second < bytes) continue;
-        offset = it->first;
-        const auto remaining = it->second - bytes;
-        state.pool.erase(it);
-        if (remaining != 0) state.pool.emplace(offset + bytes, remaining);
-        return true;
+    auto next = state.pool.lower_bound(offset);
+    if (next != state.pool.end() && next->first == offset + bytes) {
+        bytes += next->second;
+        next = state.pool.erase(next);
     }
-    return false;
+    if (next != state.pool.begin()) {
+        const auto previous = std::prev(next);
+        if (previous->first + previous->second == offset) {
+            previous->second += bytes;
+            return;
+        }
+    }
+    state.pool.emplace(offset, bytes);
 }
 
 std::uint64_t _takePoolPages(AmmState& state, std::uint64_t bytes) {
-    std::uint64_t offset = 0;
-    if (!_tryTakePoolPages(state, bytes, offset)) throw std::runtime_error("AMM: no free run of " + std::to_string(bytes) + " bytes in the direct memory given to the mapper");
-    return offset;
-}
-
-// Wolverine stack (fork c205785ba): pool pages for `bytes` taken from several runs (first fit),
-// for a map no single free run holds. The PS5 maps the mapper's pages through page tables, so a
-// fragmented pool still serves it (PPSA03671 aborted on 5-11 MB maps in the cabin otherwise).
-std::vector<AmmPage> _takeScatteredPages(AmmState& state, std::uint64_t bytes, std::int32_t type, std::int32_t protection) {
-    std::uint64_t free = 0;
-    for (const auto& [offset, size] : state.pool) free += size;
-    if (free < bytes) throw std::runtime_error("AMM: " + std::to_string(bytes) + " bytes requested, " + std::to_string(free) + " free in the direct memory given to the mapper");
-    std::vector<AmmPage> pages;
-    pages.reserve(bytes / PS5_PAGE_SIZE);
-    while (pages.size() * PS5_PAGE_SIZE < bytes) {
-        auto it = state.pool.begin();
-        const auto take = std::min(it->second, bytes - pages.size() * PS5_PAGE_SIZE);
+    for (auto it = state.pool.begin(); it != state.pool.end(); ++it) {
+        if (it->second < bytes) continue;
         const auto offset = it->first;
-        const auto remaining = it->second - take;
+        const auto remaining = it->second - bytes;
         state.pool.erase(it);
-        if (remaining != 0) state.pool.emplace(offset + take, remaining);
-        for (std::uint64_t page = 0; page < take; page += PS5_PAGE_SIZE) pages.push_back({offset + page, type, protection, true});
+        if (remaining != 0) state.pool.emplace(offset + bytes, remaining);
+        return offset;
     }
-    return pages;
+    throw std::runtime_error("AMM: no free run of " + std::to_string(bytes) + " bytes in the direct memory given to the mapper");
 }
 
 void _addPage(AmmState& state, std::uint64_t address, const AmmPage& page) {
-    AmmPool::AddPage(state, address, page);
+    state.pages[address] = page;
+    if (page.pooled) ++state.pooledUses[page.physical];
 }
 
 void _releasePage(AmmState& state, const AmmPage& page) {
@@ -452,7 +523,7 @@ void _requirePrt(AmmState& state, std::uint64_t address, std::uint64_t size) {
 void _zeroPrt(std::uint64_t address, std::uint64_t size) {
     constexpr int GpuRead = 0x10;
     void* target = reinterpret_cast<void*>(address);
-    if (DoMapZero(&target, size, GpuRead, GuestMapFixed) != 0) throw std::runtime_error("AMM: cannot map the unbacked PRT pages");
+    if (DoMapAnon(&target, size, GpuRead, GuestMapFixed) != 0) throw std::runtime_error("AMM: cannot map the unbacked PRT pages");
 }
 
 void _ammUnmap(const Apr::AmmUnmapCommand& command) {
@@ -501,12 +572,14 @@ void _ammAllocatePrt(const Apr::AmmProtectCommand& command) {
             }
             if (DoMprotect(reinterpret_cast<void*>(address), bytes, _ammHostProtection(command.protection)) != 0) throw std::runtime_error("AMM: protection change failed");
         } else {
+            std::vector<AmmPage> pages;
             try {
-                AmmPool::MapScattered(state, address, bytes, command.type, command.protection, [&](std::uint64_t at, std::uint64_t physical, std::uint64_t size) { _mapRun(at, physical, size, command.protection); });
+                for (std::uint64_t page = 0; page < bytes; page += PS5_PAGE_SIZE) pages.push_back({_takePoolPages(state, PS5_PAGE_SIZE), command.type, command.protection, true});
             } catch (...) {
-                _zeroPrt(address, bytes);
+                for (const auto& page : pages) _returnPoolPages(state, page.physical, PS5_PAGE_SIZE);
                 throw;
             }
+            _mapPages(state, address, pages);
         }
         offset = end;
     }
@@ -519,29 +592,7 @@ void _ammMap(const Apr::AmmMapCommand& command, bool direct) {
     _reserve(command.address, command.size);
     _forgetPages(state, command.address, command.size);
     _clearPrt(state, command.address, command.size);
-    std::uint64_t physical = direct ? command.directOffset : 0;
-    if (!direct && !_tryTakePoolPages(state, command.size, physical)) {
-        const auto pages = _takeScatteredPages(state, command.size, command.type, command.protection);
-        static std::atomic<int> reported{0};
-        if (reported.fetch_add(1, std::memory_order_relaxed) < 8) std::fprintf(stderr, "[amm] no free run of %llu bytes: mapping 0x%llx from scattered pool pages\n", static_cast<unsigned long long>(command.size), static_cast<unsigned long long>(command.address));
-        std::size_t mapped = 0;
-        try {
-            for (std::size_t first = 0; first < pages.size();) {
-                std::size_t last = first + 1;
-                while (last < pages.size() && pages[last].physical == pages[last - 1].physical + PS5_PAGE_SIZE) ++last;
-                _mapRun(command.address + first * PS5_PAGE_SIZE, pages[first].physical, (last - first) * PS5_PAGE_SIZE, command.protection);
-                for (std::size_t index = first; index < last; ++index) _addPage(state, command.address + index * PS5_PAGE_SIZE, pages[index]);
-                mapped = last;
-                first = last;
-            }
-        } catch (...) {
-            _forgetPages(state, command.address, command.size);
-            for (std::size_t index = mapped; index < pages.size(); ++index) _returnPoolPages(state, pages[index].physical, PS5_PAGE_SIZE);
-            _reserve(command.address, command.size);
-            throw;
-        }
-        return;
-    }
+    const auto physical = direct ? command.directOffset : _takePoolPages(state, command.size);
     try {
         _mapRun(command.address, physical, command.size, command.protection);
     } catch (...) {
@@ -619,19 +670,10 @@ struct Deferred {
 std::optional<Deferred> _execute(const Apr::CommandBufferObject& buffer, std::uint32_t start = 0, ReadCursor read = {}, bool defer = false) {
     std::uint32_t cursor = start;
     while (cursor < buffer.offset) {
-        if (buffer.offset - cursor < Apr::NopHeaderBytes) throw std::runtime_error("APR: truncated command buffer");
-        std::uint32_t first;
-        std::memcpy(&first, buffer.base + cursor, sizeof(first));
-        if (Apr::IsNopHeader(first)) {
-            const std::uint32_t bytes = Apr::NopDwords(first) * Apr::NopHeaderBytes;
-            if (bytes > buffer.offset - cursor) throw std::runtime_error("APR: malformed command");
-            cursor += bytes;
-            continue;
-        }
         if (cursor + sizeof(Apr::CommandHeader) > buffer.offset) throw std::runtime_error("APR: truncated command buffer");
         Apr::CommandHeader header;
         std::memcpy(&header, buffer.base + cursor, sizeof(header));
-        if ((first & 0xffu) == static_cast<std::uint32_t>(Apr::Opcode::CompactReadFileGather)) {
+        if ((static_cast<std::uint32_t>(header.opcode) & 0xffu) == static_cast<std::uint32_t>(Apr::Opcode::CompactReadFileGather)) {
             if (sizeof(Apr::CompactReadFileGatherCommand) > buffer.offset - cursor) throw std::runtime_error("APR: truncated compact gather command");
             Apr::CompactReadFileGatherCommand command;
             std::memcpy(&command, buffer.base + cursor, sizeof(command));
@@ -643,6 +685,7 @@ std::optional<Deferred> _execute(const Apr::CommandBufferObject& buffer, std::ui
         }
         if (header.bytes < sizeof(header) || header.bytes > buffer.offset - cursor) throw std::runtime_error("APR: malformed command");
         switch (header.opcode) {
+        case Apr::Opcode::Nop:
         case Apr::Opcode::PushMarker:
         case Apr::Opcode::PopMarker:
         case Apr::Opcode::SetMarker:
@@ -711,7 +754,6 @@ std::optional<Deferred> _execute(const Apr::CommandBufferObject& buffer, std::ui
         case Apr::Opcode::WriteKernelEventQueue: {
             const auto command = _read<Apr::WriteKernelEventQueueCommand>(buffer, cursor);
             EqueueTriggerEvent_nid_postfix(static_cast<KernelEqueue>(command.equeue), static_cast<uintptr_t>(command.ident), EVFILT_AMPR, reinterpret_cast<void*>(command.data));
-
             break;
         }
         case Apr::Opcode::WriteAddressFromTimeCounter: {
@@ -739,6 +781,8 @@ std::optional<Deferred> _execute(const Apr::CommandBufferObject& buffer, std::ui
 
 extern "C" {
 
+int APS5_VABI sceKernelAllocateDirectMemory(int64_t searchStart, int64_t searchEnd, size_t length, size_t alignment, int memoryType, int64_t* offset);
+
 int AmmGiveDirectMemory_nid_no_patch(std::int64_t searchStart, std::int64_t searchEnd, std::size_t size, std::size_t alignment, int usage, std::int64_t* offset) {
     if (!offset || (usage != 0 && usage != 1)) return SCE_KERNEL_ERROR_EINVAL;
     const int result = sceKernelAllocateDirectMemory(searchStart, searchEnd, size, alignment, 0, offset);
@@ -763,6 +807,7 @@ struct AprQueue {
     std::mutex submit;
     std::mutex mutex;
     std::condition_variable ready;
+    std::condition_variable done;
     struct Work {
         std::vector<std::uint8_t> commands;
         Deferred resume;
@@ -770,32 +815,13 @@ struct AprQueue {
     };
     std::deque<Work> pending;
     bool running = false;
+    std::uint32_t submitted = 0;
+    std::uint32_t completed = 0;
 };
 
-struct AprCompletion {
-    std::mutex mutex;
-    std::condition_variable done;
-    std::set<std::uint32_t> outstanding;
-    std::uint32_t issued = 0;
-};
-
-AprCompletion& _completion(bool amm) {
-    static AprCompletion* const completions[2] = {new AprCompletion(), new AprCompletion()};
-    return *completions[amm ? 1 : 0];
-}
-
-void _complete(bool amm, std::uint32_t id) {
-    auto& completion = _completion(amm);
-    {
-        std::lock_guard lock(completion.mutex);
-        completion.outstanding.erase(id);
-    }
-    completion.done.notify_all();
-}
-
-AprQueue* _startQueue(bool amm) {
+AprQueue* _startQueue() {
     auto* created = new AprQueue();
-    std::thread([created, amm] {
+    std::thread([created] {
         for (;;) {
             AprQueue::Work work;
             {
@@ -816,39 +842,27 @@ AprQueue* _startQueue(bool amm) {
             {
                 std::lock_guard lock(created->mutex);
                 created->running = false;
+                created->completed = std::max(created->completed, work.id);
             }
-            _complete(amm, work.id);
+            created->done.notify_all();
         }
     }).detach();
     return created;
 }
 
-AprQueue& _queue(bool amm, std::uint32_t priority) {
-    if (amm) {
-        static AprQueue* const ammQueue = _startQueue(true);
-        return *ammQueue;
-    }
-    static std::mutex& queuesLock = *new std::mutex();
-    static std::map<std::uint32_t, AprQueue*>& queues = *new std::map<std::uint32_t, AprQueue*>();
-    std::lock_guard lock(queuesLock);
-    auto& queue = queues[priority];
-    if (queue == nullptr) queue = _startQueue(false);
-    return *queue;
+AprQueue& _queue(bool amm) {
+    static AprQueue* const queues[2] = {_startQueue(), _startQueue()};
+    return *queues[amm ? 1 : 0];
 }
 
-std::uint32_t _submit(const std::uint8_t* base, std::uint32_t bytes, bool amm, std::uint32_t priority = 0) {
-    auto& queue = _queue(amm, priority);
-    auto& completion = _completion(amm);
+std::uint32_t _submit(const std::uint8_t* base, std::uint32_t bytes, bool amm) {
+    auto& queue = _queue(amm);
     std::lock_guard submitLock(queue.submit);
     std::uint32_t id;
-    {
-        std::lock_guard lock(completion.mutex);
-        id = ++completion.issued;
-        completion.outstanding.insert(id);
-    }
     bool queued;
     {
         std::lock_guard lock(queue.mutex);
+        id = ++queue.submitted;
         queued = queue.running || !queue.pending.empty();
     }
     const auto enqueue = [&](Deferred resume) {
@@ -866,30 +880,32 @@ std::uint32_t _submit(const std::uint8_t* base, std::uint32_t bytes, bool amm, s
         enqueue(*deferred);
         return id;
     }
-    _complete(amm, id);
+    {
+        std::lock_guard lock(queue.mutex);
+        queue.completed = std::max(queue.completed, id);
+    }
+    queue.done.notify_all();
     return id;
 }
 
 void _waitSubmitted(std::uint32_t id, bool amm) {
-    auto& completion = _completion(amm);
-    std::unique_lock lock(completion.mutex);
-    completion.done.wait(lock, [&] { return id > completion.issued || !completion.outstanding.contains(id); });
+    auto& queue = _queue(amm);
+    std::unique_lock lock(queue.mutex);
+    queue.done.wait(lock, [&] { return queue.completed >= id || id > queue.submitted; });
 }
 
 std::uint32_t AmmSubmit_nid_no_patch(void* base, std::uint32_t bytes) {
-    return _submit(static_cast<const std::uint8_t*>(base), bytes, true);
+    const auto id = _submit(static_cast<const std::uint8_t*>(base), bytes, true);
+    _amm().lastSubmit.store(id);
+    return id;
 }
 
 bool AmmSubmitted_nid_no_patch(std::uint32_t id) {
-    if (id == 0) return false;
-    {
-        auto& completion = _completion(true);
-        std::lock_guard lock(completion.mutex);
-        if (id > completion.issued) return false;
-    }
+    if (id == 0 || id > _amm().lastSubmit.load()) return false;
     _waitSubmitted(id, true);
     return true;
 }
+
 
 int APS5_VABI sceKernelAprResolveFilepathsToIds(const char** paths, uint32_t count, uint32_t* ids, uint32_t* error_index) {
     if (!paths || !ids) return _fail(GUEST_EINVAL);
@@ -936,29 +952,30 @@ int APS5_VABI sceKernelAprResolveFilepathsWithPrefixToIds(const char* prefix, co
 
 int APS5_VABI sceKernelAprGetFileSize(uint32_t id, uint64_t* size) {
     if (!size) return _fail(GUEST_EINVAL);
-    const std::uint64_t bytes = _file(id).size;
-    if (!GuestCopyOut_nid_no_patch(size, &bytes, sizeof(bytes))) return _fail(GUEST_EFAULT);
+    *size = _file(id).size;
     return 0;
 }
 
 int APS5_VABI sceKernelAprGetFileStat(uint32_t id, FileStat* stat) {
     if (!stat) return _fail(GUEST_EINVAL);
-    FileStat result{};
-    File::FillFileStat(_file(id).path, &result);
-    if (!GuestCopyOut_nid_no_patch(stat, &result, sizeof(result))) return _fail(GUEST_EFAULT);
+    const auto file = _file(id);
+    File::FillFileStat(file.path, stat);
+    stat->st_size = static_cast<decltype(stat->st_size)>(file.size);
     return 0;
 }
 
 int APS5_VABI sceKernelAprSubmitCommandBuffer(const Apr::CommandBufferObject* buffer, uint32_t priority) {
+    (void)priority;
     if (!buffer) return _fail(GUEST_EINVAL);
-    _submit(buffer->base, buffer->offset, false, priority);
+    _submit(buffer->base, buffer->offset, false);
     return 0;
 }
 
 int APS5_VABI sceKernelAprSubmitCommandBufferAndGetId(const Apr::CommandBufferObject* buffer, uint32_t priority, uint32_t* id) {
     if (!id) return _fail(GUEST_EINVAL);
+    (void)priority;
     if (!buffer) return _fail(GUEST_EINVAL);
-    *id = _submit(buffer->base, buffer->offset, false, priority);
+    *id = _submit(buffer->base, buffer->offset, false);
     return 0;
 }
 
