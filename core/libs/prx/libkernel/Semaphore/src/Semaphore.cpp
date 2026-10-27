@@ -1,5 +1,6 @@
 #include "prx/libkernel/Semaphore/include/Semaphore.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
+#include "prx/libc/include/General.hpp"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -38,11 +39,14 @@ KernelSemaPrivate* KernelSemaObjectForTests_nid_no_patch(KernelSema handle) {
 
 int APS5_VABI sceKernelCreateSema(KernelSema* sem, const char* name, uint32_t attr, int init, int max, void* opt) {
  (void)opt;
- if (sem == nullptr || attr > 2 || max < 0) {
+ if (sem == nullptr) {
   APS5_INVALID_ARG_EX;
  }
- if (name == nullptr || init < 0 || max == 0 || init > max) {
+ if ((attr & ~0x103u) != 0 || (attr & 3u) == 3u || name == nullptr || init < 0 || max <= 0 || init > max) {
   return SCE_KERNEL_ERROR_EINVAL;
+ }
+ if ((attr & 0x100u) != 0) {
+  NotImplemented_nid_no_patch("sceKernelCreateSema with attribute bit 0x100");
  }
 
  auto created = std::make_shared<KernelSemaPrivate>(init, max, std::string(name), attr == 1);
@@ -79,10 +83,7 @@ int APS5_VABI sceKernelSignalSema(KernelSema handle, int count) {
  if (sem == nullptr) {
   return SCE_KERNEL_ERROR_ESRCH;
  }
- if (count < 0) {
-  APS5_INVALID_ARG_EX;
- }
- if (count == 0) {
+ if (count <= 0) {
   return SCE_KERNEL_ERROR_EINVAL;
  }
 
