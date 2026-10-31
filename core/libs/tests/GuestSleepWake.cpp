@@ -1,4 +1,5 @@
 #include "prx/libkernel/Time/include/Time.hpp"
+#include "prx/libkernel/Time/include/TimedWait.hpp"
 #include "SceTypes.hpp"
 #include <atomic>
 #include <chrono>
@@ -36,7 +37,7 @@ public:
     Waker() : thread([this] {
         while (!stop.load()) {
             KernelWakeSleepers_nid_no_patch();
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
+            TimedWait::SleepNanos(50000);
         }
     }) {}
     ~Waker() {
