@@ -1141,7 +1141,6 @@ void CheckDepthTarget(Context context, VkFormat format, std::uint32_t fragments,
                             for (std::size_t i = 0u; i < metadataBytes / 4u; ++i) std::memcpy(metadata.Data() + i * 4u, &clearPattern, 4u);
                         }
                         const bool completionCandidate = NoteHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes), nativeBytes);
-                        if (fault == ClearFault::FillDuringClear) NoteDepthMetadataFill(target.htileAddress, static_cast<std::size_t>(metadataBytes), clearPattern);
                         if (fault == ClearFault::ImportWindowWrite) {
                             const auto beforeImport = AgcDriver::GuestMemory::TrackerGeneration();
                             Require(AgcDriver::GuestMemory::ImportWatched(target.htileAddress, static_cast<std::size_t>(metadataBytes), [&] {
@@ -1150,7 +1149,25 @@ void CheckDepthTarget(Context context, VkFormat format, std::uint32_t fragments,
                             }), "HTILE host import simulation failed");
                             Require(AgcDriver::GuestMemory::CollectWritesUncached(target.htileAddress, static_cast<std::size_t>(metadataBytes)) > beforeImport, "HTILE import window did not stamp its changed page");
                         }
+                        if (completionCandidate && fault == ClearFault::None) {
+                            TargetRefuses([&] {
+                                auto uploadContext = context;
+                                uploadContext.hostImportAlignment = 0;
+                                GuestBufferMemory buffer(uploadContext);
+                                buffer.AddWritable(target.htileAddress, metadataBytes);
+                                buffer.Upload(false);
+                            }, "sample-preserving guest publication");
+                            const auto accepted = std::pair{target.htileAddress, static_cast<std::size_t>(metadataBytes)};
+                            RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes, accepted);
+                            TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.address, bytes, accepted); }, "sample-preserving guest publication");
+                            TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes + 1u, accepted); }, "sample-preserving guest publication");
+                            Require(DepthSurfaceAt(target.address), "an accepted HTILE buffer access retired its native depth owner");
+                        }
+                        if (fault == ClearFault::FillDuringClear) NoteDepthMetadataFill(target.htileAddress, static_cast<std::size_t>(metadataBytes), clearPattern);
                         if (completionCandidate) ArmHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes));
+                        if (completionCandidate && fault == ClearFault::None) {
+                            TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes, std::pair{target.htileAddress, static_cast<std::size_t>(metadataBytes)}); }, "sample-preserving guest publication");
+                        }
                         if (fault == ClearFault::Overlap) NoteHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes), nativeBytes);
                         const auto storedBytes = fault == ClearFault::PartialStore ? 4u : static_cast<std::size_t>(metadataBytes);
                         if (fault == ClearFault::PossibleStore || fault == ClearFault::CompletedPossibleStore) {
@@ -1164,41 +1181,18 @@ void CheckDepthTarget(Context context, VkFormat format, std::uint32_t fragments,
                         });
                         if (fault == ClearFault::CpuWrite) metadata.Data()[metadataBytes - 1u] ^= std::byte{0x01};
                         if (fault == ClearFault::DepthWrite) memory.Data()[bytes - 1u] ^= std::byte{0x01};
-                        if (fault == ClearFault::PendingWrite) QueueTargetByteWrite(context, recorder, target.htileAddress, std::byte{0});
+                        if (fault == ClearFault::PendingWrite) {
+                            QueueTargetByteWrite(context, recorder, target.htileAddress, std::byte{0});
+                            std::string pendingRefusal;
+                            try { CachedSampledTexture(context, words); }
+                            catch (const std::exception& error) { pendingRefusal = error.what(); }
+                            const bool refused = pendingRefusal.find("external GPU writes") != std::string::npos;
+                            if (!refused) std::fprintf(stderr, "Pending HTILE texture refusal: %s\n", pendingRefusal.c_str());
+                            Require(refused, "an unrecognized pending HTILE write was accepted or refused for another reason");
+                        }
                     }
                 } else {
                     const auto nativeBytes = fault == ClearFault::UnprovenDispatch ? 0u : static_cast<std::size_t>(metadataBytes);
-                    if (fault == ClearFault::PartialStore || fault == ClearFault::PossibleStore || fault == ClearFault::CompletedPossibleStore) {
-                        for (std::size_t i = 0u; i < metadataBytes / 4u; ++i) std::memcpy(metadata.Data() + i * 4u, &clearPattern, 4u);
-                    }
-                    const bool completionCandidate = NoteHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes), nativeBytes);
-                    if (fault == ClearFault::ImportWindowWrite) {
-                        const auto beforeImport = AgcDriver::GuestMemory::TrackerGeneration();
-                        Require(AgcDriver::GuestMemory::ImportWatched(target.htileAddress, static_cast<std::size_t>(metadataBytes), [&] {
-                            metadata.Data()[0] ^= std::byte{0x01};
-                            return true;
-                        }), "HTILE host import simulation failed");
-                        Require(AgcDriver::GuestMemory::CollectWritesUncached(target.htileAddress, static_cast<std::size_t>(metadataBytes)) > beforeImport, "HTILE import window did not stamp its changed page");
-                    }
-                    if (completionCandidate && fault == ClearFault::None) {
-                        TargetRefuses([&] {
-                            auto uploadContext = context;
-                            uploadContext.hostImportAlignment = 0;
-                            GuestBufferMemory buffer(uploadContext);
-                            buffer.AddWritable(target.htileAddress, metadataBytes);
-                            buffer.Upload(false);
-                        }, "sample-preserving guest publication");
-                        const auto accepted = std::pair{target.htileAddress, static_cast<std::size_t>(metadataBytes)};
-                        RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes, accepted);
-                        TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.address, bytes, accepted); }, "sample-preserving guest publication");
-                        TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes + 1u, accepted); }, "sample-preserving guest publication");
-                        Require(DepthSurfaceAt(target.address), "an accepted HTILE buffer access retired its native depth owner");
-                    }
-                    if (completionCandidate) ArmHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes));
-                    if (completionCandidate && fault == ClearFault::None) {
-                        TargetRefuses([&] { RequireNoResidentDepthRead_nid_no_patch(target.htileAddress, metadataBytes, std::pair{target.htileAddress, static_cast<std::size_t>(metadataBytes)}); }, "sample-preserving guest publication");
-                    }
-                    if (fault == ClearFault::Overlap) NoteHtileDepthClear(target.htileAddress, static_cast<std::size_t>(metadataBytes), nativeBytes);
                     const auto storedBytes = fault == ClearFault::PartialStore ? 4u : static_cast<std::size_t>(metadataBytes);
                     if (source == ClearSource::QueuedFill) {
                         const std::uint32_t queuedPattern = fault == ClearFault::BadMetadata ? 0x0fu : clearPattern;
