@@ -941,6 +941,10 @@ std::string RequestSerializer::Serialize(const RecompileRequest& request) const 
     writer.WriteU32(request.target.pixelFunctionStorageDwords);
     writer.WriteBool(request.target.fragmentBarycentricBuiltins);
     writer.WriteBool(request.target.shaderImageMinLod);
+    if (request.context.compute.has_value()) {
+        writer.WriteU32(request.context.compute->granulatedVgprCount);
+        writer.WriteU32(request.context.compute->sharedVgprBlocks);
+    }
     return base64Encode(buffer);
 }
 
@@ -949,7 +953,7 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     Reader reader(decoded);
     if (reader.ReadU32() != 0x41505335u) throw std::runtime_error("invalid recompile request signature");
     const auto version = reader.ReadU32();
-    if (version < 1u || version > 50u) throw std::runtime_error("unsupported recompile request serialization version");
+    if (version < 1u || version > 51u) throw std::runtime_error("unsupported recompile request serialization version");
     DeserializedRequest result{};
     result.request.shader = readShaderBinary(reader, result.shaderCode, result.shaderHeader);
     result.request.context = readGuestContext(reader, result, version);
@@ -1010,6 +1014,10 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     }
     if (version >= 48u) result.request.target.fragmentBarycentricBuiltins = reader.ReadBool();
     if (version >= 50u) result.request.target.shaderImageMinLod = reader.ReadBool();
+    if (version >= 51u && result.request.context.compute.has_value()) {
+        result.request.context.compute->granulatedVgprCount = reader.ReadU32();
+        result.request.context.compute->sharedVgprBlocks = reader.ReadU32();
+    }
     if (version >= 21u && reader.Remaining() != 0u) throw std::runtime_error("RequestSerializer: unexpected trailing data");
     return result;
 }
