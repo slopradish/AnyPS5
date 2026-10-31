@@ -936,32 +936,28 @@ KernelEqueueEvent EqueueDescriptorEvent(int descriptor, int16_t filter, uint16_t
     return event;
 }
 
-namespace {
-
-struct DescriptorCloseObservers {
+struct CloseObserverRegistry {
     std::mutex mutex;
     std::vector<void (*)(int)> observers;
 };
 
-DescriptorCloseObservers& DescriptorCloseObserversOf() {
-    static DescriptorCloseObservers value;
-    return value;
-}
-
+static CloseObserverRegistry& GetCloseObserverRegistry() {
+    static auto* registry = new CloseObserverRegistry;
+    return *registry;
 }
 
 extern "C" void RegisterDescriptorCloseObserver_nid_no_patch(void (*observer)(int descriptor)) {
-    auto& closeObservers = DescriptorCloseObserversOf();
-    std::lock_guard lock(closeObservers.mutex);
-    closeObservers.observers.push_back(observer);
+    auto& registry = GetCloseObserverRegistry();
+    std::lock_guard lock(registry.mutex);
+    registry.observers.push_back(observer);
 }
 
 static void NotifyDescriptorCloseObservers(int descriptor) {
+    auto& registry = GetCloseObserverRegistry();
     std::vector<void (*)(int)> observers;
     {
-        auto& closeObservers = DescriptorCloseObserversOf();
-        std::lock_guard lock(closeObservers.mutex);
-        observers = closeObservers.observers;
+        std::lock_guard lock(registry.mutex);
+        observers = registry.observers;
     }
     for (const auto observer : observers) observer(descriptor);
 }
