@@ -773,6 +773,7 @@ private:
     std::uint64_t version = 0;
     std::uint64_t writes = 0;
     std::uint64_t writesAtFill = 0;
+    bool keysFilledSinceRefresh = false;
     std::vector<bool> layerWrittenSinceFill;
     // `original` holds the guest bytes; false after a GPU-side clear, which never read them.
     std::vector<bool> layerOriginal;

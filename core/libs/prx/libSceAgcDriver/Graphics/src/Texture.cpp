@@ -2333,12 +2333,18 @@ bool StorageTexture::refresh(std::uint32_t firstLayer, std::uint32_t lastLayer) 
             }
         };
         const auto keysStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const bool keysFilled = keysFilledSinceRefresh;
+        keysFilledSinceRefresh = false;
         keys = handOverKeys.has_value() ? *handOverKeys : ProvedKeys();
         if (profile && descriptor.dccAddress != 0) LookupOutcomes::Add(LookupOutcomes::DccScan, keysStart);
         if (keys != uploadedKeys) {
             changed.assign(trackedLayers, true);
             unchanged = false;
             keysChanged = true;
+            if (IsDccClear(keys) && !(keysFilled && keys == filledKeys)) {
+                writesAtFill = writes;
+                layerWrittenSinceFill.assign(trackedLayers, false);
+            }
             // Which units the CPU stamped still decides what the drop rule below may drop.
             if (blockUnits) scanBlocks();
         } else if (blockUnits) {
@@ -2495,7 +2501,7 @@ bool StorageTexture::refresh(std::uint32_t firstLayer, std::uint32_t lastLayer) 
         }
         if (changed[layer]) {
             pendingResults = true;
-            if (droppable(layer)) {
+            if (blockUnits && droppable(layer)) {
                 CaptureTrace::Log("drop-unit image=%llx unit=%u generation=%llu stamped=%d keys=%d", static_cast<unsigned long long>(descriptor.baseAddress), layer, static_cast<unsigned long long>(layerGeneration[layer]), layer < stampedBlocks.size() && stampedBlocks[layer] != 0, static_cast<int>(keys));
                 layerPending[layer] = false;
                 dropped = true;
@@ -5457,6 +5463,7 @@ std::size_t StorageTexture::NoteKeysFill(std::uint64_t address, std::size_t byte
         if (!texture->keysFillMatches(address, bytes, overlapped)) continue;
         texture->filledKeys = keys;
         texture->writesAtFill = texture->writes;
+        texture->keysFilledSinceRefresh = true;
         texture->layerWrittenSinceFill.assign(texture->trackedLayers, false);
         ++covered;
         if (traceKeys && IsDccClear(keys)) std::fprintf(stderr, "[dcc-keys] %s key fill over 0x%llx+0x%llx (uploaded %s, dirty %d)\n", DccKeysName(keys), static_cast<unsigned long long>(texture->descriptor.baseAddress), static_cast<unsigned long long>(texture->guestBytes), DccKeysName(texture->uploadedKeys), texture->dirty ? 1 : 0);
