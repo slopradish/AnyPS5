@@ -41,6 +41,7 @@ constexpr int PAD_ERROR_UNKNOWN_USER = static_cast<int>(0x809b0081);
 constexpr int PAD_ERROR_INVALID_USER_ID = static_cast<int>(0x809b0001);
 constexpr int PAD_ERROR_INVALID_PORT_INDEX = static_cast<int>(0x809b0003);
 constexpr int PAD_ERROR_NOT_PERMITTED = static_cast<int>(0x80920101);
+constexpr int PAD_ERROR_INVALID_VOLUME_GAIN = static_cast<int>(0x80920001);
 constexpr int PAD_USER_ID_INVALID = -1;
 
 std::array<std::atomic_bool, PAD_MAX_CONTROLLERS> g_opened{};
@@ -293,8 +294,8 @@ int APS5_VABI scePadGetContainerIdInformation(int handle, PadContainerIdInformat
  if (info == nullptr) return PAD_ERROR_INVALID_ARG;
  const int device = DeviceOf(handle);
  if (device != PAD_OK) return device;
+ std::memset(info, 0, 16);
  info->size = 0;
- info->id[0] = '\0';
  return PAD_OK;
 }
 
@@ -473,6 +474,7 @@ int APS5_VABI scePadSetAudioOutPath(int handle, int path) {
 int APS5_VABI scePadSetVolumeGain(int handle, const PadVolumeGain* gain) {
  if (!Pad::IsInitialized()) return PAD_ERROR_NOT_INITIALIZED;
  if (gain == nullptr) return PAD_ERROR_INVALID_ARG;
+ if (gain->speakerVolume == 0x80u || gain->headsetVolume == 0x80u || gain->micGain == 0x80u) return PAD_ERROR_INVALID_VOLUME_GAIN;
  if (!KnownHandle(handle)) return PAD_ERROR_INVALID_HANDLE;
  if (SpecialHandle(handle)) return PAD_OK;
  Pad::SetVolumeGain(PortOf(handle), gain->speakerVolume, gain->headsetVolume, gain->micGain);
@@ -543,7 +545,10 @@ int APS5_VABI scePadGetAccessibilityControllerState(int handle, std::uint32_t* s
     if (!Pad::IsInitialized()) return PAD_ERROR_NOT_INITIALIZED;
     if (state == nullptr) return PAD_ERROR_INVALID_ARG;
     if (!KnownHandle(handle)) return PAD_ERROR_INVALID_HANDLE;
-    *state = 0;
+    state[0] = 0;
+    state[1] = 0;
+    state[2] = 0;
+    state[3] = 0;
     return PAD_OK;
 }
 
