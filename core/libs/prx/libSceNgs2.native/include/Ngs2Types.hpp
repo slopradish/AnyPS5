@@ -217,17 +217,9 @@ struct Ngs2SystemInfo {
 };
 static_assert(sizeof(Ngs2SystemInfo) == 184);
 
-#ifdef APS5_NGS2_PS4_LIBRARY
-static constexpr std::size_t Ngs2RackNameBytes = 16;
-static constexpr std::size_t Ngs2RackOptionBytes = 128;
-#else
-static constexpr std::size_t Ngs2RackNameBytes = 64;
-static constexpr std::size_t Ngs2RackOptionBytes = 176;
-#endif
-
 struct Ngs2RackOption {
     std::size_t size;
-    char name[Ngs2RackNameBytes];
+    char name[64];
     std::uint32_t flags;
     std::uint32_t max_grain_samples;
     std::uint32_t max_voices;
@@ -238,7 +230,7 @@ struct Ngs2RackOption {
     std::uint32_t max_output_channels;
     std::uint32_t reserved[18];
 };
-static_assert(sizeof(Ngs2RackOption) == Ngs2RackOptionBytes);
+static_assert(sizeof(Ngs2RackOption) == 176);
 
 struct Ngs2SamplerRackOption {
     Ngs2RackOption rack_option;
@@ -398,11 +390,7 @@ struct Ngs2CustomRackOption {
     Ngs2CustomRackModuleInfo module[SCE_NGS2_CUSTOM_MAX_MODULES];
     Ngs2CustomRackPortInfo port[SCE_NGS2_CUSTOM_MAX_PORTS];
 };
-#ifdef APS5_NGS2_PS4_LIBRARY
-static_assert(sizeof(Ngs2CustomRackOption) == 1232);
-#else
 static_assert(sizeof(Ngs2CustomRackOption) == 1280);
-#endif
 
 struct Ngs2CustomSamplerRackOption {
     Ngs2CustomRackOption custom_rack_option;
@@ -413,22 +401,14 @@ struct Ngs2CustomSamplerRackOption {
     std::uint32_t max_ajm_atrac9_decoders;
     std::uint32_t max_codec_caches;
 };
-#ifdef APS5_NGS2_PS4_LIBRARY
-static_assert(sizeof(Ngs2CustomSamplerRackOption) == 1256);
-#else
 static_assert(sizeof(Ngs2CustomSamplerRackOption) == 1304);
-#endif
 
 struct Ngs2CustomSubmixerRackOption {
     Ngs2CustomRackOption custom_rack_option;
     std::uint32_t max_channels;
     std::uint32_t max_inputs;
 };
-#ifdef APS5_NGS2_PS4_LIBRARY
-static_assert(sizeof(Ngs2CustomSubmixerRackOption) == 1240);
-#else
 static_assert(sizeof(Ngs2CustomSubmixerRackOption) == 1288);
-#endif
 
 using Ngs2CustomMasteringRackOption = Ngs2CustomSubmixerRackOption;
 

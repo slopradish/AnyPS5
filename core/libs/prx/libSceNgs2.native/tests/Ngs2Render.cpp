@@ -88,11 +88,7 @@ static void TestErrorsAndInfo() {
     Require(TestRackCreate(system, SCE_NGS2_RACK_ID_SUBMIXER, &named.rack_option, &namedBuffer, &namedRack) == SCE_NGS2_OK);
     Ngs2RackInfo namedInfo{};
     Require(sceNgs2RackGetInfo(namedRack, &namedInfo, sizeof(namedInfo)) == SCE_NGS2_OK);
-#ifdef APS5_NGS2_PS4_LIBRARY
-    Require(namedInfo.name[0] == 'n' && namedInfo.name[14] == 'n' && namedInfo.name[15] == '\0');
-#else
     Require(namedInfo.name[0] == 'n' && namedInfo.name[62] == 'n' && namedInfo.name[63] == '\0');
-#endif
     Require(namedInfo.type == 1 && namedInfo.rack_id == SCE_NGS2_RACK_ID_SUBMIXER && namedInfo.uid != rackInfo.uid && namedInfo.max_grain_samples == 256);
     Require(namedInfo.max_voices == 2 && namedInfo.max_ports == 2 && namedInfo.max_inputs == 3 && namedInfo.max_channel_works == 4);
     Require(namedInfo.buffer_info.host_buffer == namedBuffer.host_buffer && namedInfo.render_count == 0);
