@@ -20,8 +20,30 @@ struct UserEvent {
     int userId;
 };
 
+using UserEventCallback = void (*)(SceUserServiceEvent*, void*);
+
 std::deque<UserEvent> eventQueue;
 std::array<bool, USER_SERVICE_MAX_USERS> userConnected{true, false, false, false};
+
+std::mutex eventCallbackMutex;
+UserEventCallback eventCallback = nullptr;
+void* eventCallbackArg = nullptr;
+
+void DeliverUserEvent(std::uint32_t eventType, int userId) {
+ UserEventCallback callback;
+ void* userData;
+ {
+  std::lock_guard lock(eventCallbackMutex);
+  callback = eventCallback;
+  userData = eventCallbackArg;
+ }
+ if (callback == nullptr) {
+  return;
+ }
+ SceUserServiceEvent event{eventType, userId};
+ callback(&event, userData);
+}
+
 
 int UserIndex(int userId) {
     if (userId >= USER_SERVICE_INITIAL_USER_ID && userId < USER_SERVICE_INITIAL_USER_ID + USER_SERVICE_MAX_USERS) {
@@ -49,21 +71,6 @@ int ReportAccessibilitySetting(int user_id, int32_t* setting, int32_t value) {
  *setting = value;
  return USER_SERVICE_OK;
 }
-
-void PopulateInitialLoginEvents() {
- std::lock_guard lock(userMutex);
- eventQueue.clear();
- constexpr std::uint32_t EventTypeLogin = 0;
- if (userConnected[0]) {
-  eventQueue.push_back({EventTypeLogin, USER_SERVICE_INITIAL_USER_ID});
- }
- for (int i = 1; i < USER_SERVICE_MAX_USERS; ++i) {
-  if (userConnected[i]) {
-   eventQueue.push_back({EventTypeLogin, USER_SERVICE_INITIAL_USER_ID + i});
-  }
- }
-}
-
 
 // Per-user keyboard settings. Nothing in AnyPS5 stores a keyboard type or input variant, so every known user reports
 // the keyboard type of the configured system language and 0 for the input variants (see
@@ -101,28 +108,37 @@ extern "C" {
 
 void UserServiceSetUserConnected_nid_postfix(int userIndex, bool connected) {
     if (userIndex < 0 || userIndex >= USER_SERVICE_MAX_USERS) return;
-    std::lock_guard lock(userMutex);
-    if (userConnected[userIndex] != connected) {
-        userConnected[userIndex] = connected;
-        if (initialized.load()) {
-            constexpr std::uint32_t EventTypeLogin = 0;
-            constexpr std::uint32_t EventTypeLogout = 1;
-            const std::uint32_t eventType = connected ? EventTypeLogin : EventTypeLogout;
-            const int userId = USER_SERVICE_INITIAL_USER_ID + userIndex;
-            bool collapsed = false;
-            for (auto it = eventQueue.begin(); it != eventQueue.end(); ++it) {
-                if (it->userId == userId) {
-                    if (it->eventType != eventType) {
-                        eventQueue.erase(it);
+    std::uint32_t deliveredType = 0;
+    int deliveredUserId = 0;
+    {
+        std::lock_guard lock(userMutex);
+        if (userConnected[userIndex] != connected) {
+            userConnected[userIndex] = connected;
+            if (initialized.load()) {
+                constexpr std::uint32_t EventTypeLogin = 0;
+                constexpr std::uint32_t EventTypeLogout = 1;
+                const std::uint32_t eventType = connected ? EventTypeLogin : EventTypeLogout;
+                const int userId = USER_SERVICE_INITIAL_USER_ID + userIndex;
+                bool collapsed = false;
+                for (auto it = eventQueue.begin(); it != eventQueue.end(); ++it) {
+                    if (it->userId == userId) {
+                        if (it->eventType != eventType) {
+                            eventQueue.erase(it);
+                        }
+                        collapsed = true;
+                        break;
                     }
-                    collapsed = true;
-                    break;
                 }
-            }
-            if (!collapsed) {
-                eventQueue.push_back({eventType, userId});
+                if (!collapsed) {
+                    eventQueue.push_back({eventType, userId});
+                }
+                deliveredType = eventType;
+                deliveredUserId = userId;
             }
         }
+    }
+    if (deliveredUserId != 0) {
+        DeliverUserEvent(deliveredType, deliveredUserId);
     }
 }
 
@@ -269,7 +285,23 @@ static int MarkInitialized() {
  if (initialized.exchange(true)) {
   return USER_SERVICE_ERROR_ALREADY_INITIALIZED;
  }
- PopulateInitialLoginEvents();
+ {
+  std::lock_guard lock(userMutex);
+  eventQueue.clear();
+  constexpr std::uint32_t EventTypeLogin = 0;
+  if (userConnected[0]) {
+   eventQueue.push_back({EventTypeLogin, USER_SERVICE_INITIAL_USER_ID});
+  }
+  for (int i = 1; i < USER_SERVICE_MAX_USERS; ++i) {
+   if (userConnected[i]) {
+    eventQueue.push_back({EventTypeLogin, USER_SERVICE_INITIAL_USER_ID + i});
+   }
+  }
+ }
+ constexpr std::uint32_t EventTypeLogin = 0;
+ if (IsUserLoggedIn(USER_SERVICE_INITIAL_USER_ID)) {
+  DeliverUserEvent(EventTypeLogin, USER_SERVICE_INITIAL_USER_ID);
+ }
  return USER_SERVICE_OK;
 }
 
@@ -293,8 +325,57 @@ int APS5_VABI sceUserServiceTerminate(void) {
  if (!initialized.exchange(false)) {
   return USER_SERVICE_ERROR_NOT_INITIALIZED;
  }
- std::lock_guard lock(userMutex);
- eventQueue.clear();
+ {
+  std::lock_guard lock(userMutex);
+  eventQueue.clear();
+ }
+ {
+  std::lock_guard lock(eventCallbackMutex);
+  eventCallback = nullptr;
+  eventCallbackArg = nullptr;
+ }
+ return USER_SERVICE_OK;
+}
+
+int APS5_VABI sceUserServiceIsLoggedIn(int userId) {
+ return IsUserLoggedIn(userId) ? 1 : 0;
+}
+
+int APS5_VABI sceUserServiceIsKratosPrimaryUser(int userId) {
+ return (userId == USER_SERVICE_INITIAL_USER_ID && IsUserLoggedIn(userId)) ? 1 : 0;
+}
+
+int APS5_VABI sceUserServiceGetKratosPrimaryUser(int* user_id) {
+ if (user_id == nullptr) {
+  return USER_SERVICE_ERROR_INVALID_ARGUMENT;
+ }
+ *user_id = USER_SERVICE_USER_ID_INVALID;
+ if (IsUserLoggedIn(USER_SERVICE_INITIAL_USER_ID)) {
+  *user_id = USER_SERVICE_INITIAL_USER_ID;
+ }
+ return USER_SERVICE_OK;
+}
+
+int APS5_VABI sceUserServiceRegisterEventCallback(UserEventCallback callback, void* userData) {
+ if (callback == nullptr) {
+  return USER_SERVICE_ERROR_INVALID_ARGUMENT;
+ }
+ {
+  std::lock_guard lock(eventCallbackMutex);
+  eventCallback = callback;
+  eventCallbackArg = userData;
+ }
+ return USER_SERVICE_OK;
+}
+
+int APS5_VABI sceUserServiceUnregisterEventCallback(UserEventCallback callback, void* userData) {
+ {
+  std::lock_guard lock(eventCallbackMutex);
+  if (eventCallback == callback) {
+   eventCallback = nullptr;
+   eventCallbackArg = nullptr;
+  }
+ }
  return USER_SERVICE_OK;
 }
 
