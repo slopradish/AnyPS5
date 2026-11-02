@@ -4175,7 +4175,7 @@ void Recorder::finish(std::unique_ptr<Batch> batch, bool wait, int source, bool 
             // rebuild keeps the previous snapshot, which is a superset (a stale entry only causes a
             // false hit, never a miss) rather than terminating.
             try {
-                recorder.publishPendingWrites();
+                if (!batch->writes.empty()) recorder.publishPendingWrites();
             } catch (...) {
             }
         }

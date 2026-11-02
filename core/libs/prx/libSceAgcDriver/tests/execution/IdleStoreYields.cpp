@@ -23,8 +23,8 @@ constexpr std::uint32_t TileR64KBX = 0x1b;
 constexpr std::uint32_t Type2D = 9;
 constexpr std::uint32_t Untouched = 0xdeadbeefu;
 constexpr std::uint32_t Stored = 0x12345678u;
-constexpr std::uint32_t FarRow = 1000;
-constexpr std::uint64_t Piece = 4u << 20u;
+constexpr std::uint32_t FarRow = 4200;
+constexpr std::uint64_t Piece = 64u << 20u;
 constexpr std::uint32_t Attempts = 10;
 
 alignas(256) constexpr std::array<std::uint32_t, 8> StoreRowZeroCode{
@@ -167,7 +167,7 @@ void StopsBetweenImages() {
 }
 
 void StopsWithinAnImage() {
-    Surface surface(2048, 1024);
+    Surface surface(4096, 4352);
     Require(surface.bytes > Piece, "idle yield fixture: the large surface is not larger than one stored piece");
     Registered registered({&surface});
     std::vector<std::uint32_t> words;
