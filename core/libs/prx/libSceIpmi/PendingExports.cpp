@@ -19,7 +19,6 @@ int APS5_VABI _ZN4IPMI6Server12EventHandler21onAsyncMethodDispatchEPNS_7SessionE
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config26SyncMethodInvocationConfigC1Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Server12EventHandler20onSyncMethodDispatchEPNS_7SessionEjPvmmS4_m(void) {
@@ -39,7 +38,6 @@ int APS5_VABI _ZN4IPMI6Server12EventHandler20onSyncMethodDispatchEPNS_7SessionEj
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config14MsgQueueConfigC1Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6ServerD2Ev(void) {
@@ -59,7 +57,6 @@ int APS5_VABI _ZN4IPMI6Server6createEPPS0_PKNS0_6ConfigEPvS6_(void) {
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6ConfigC2Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Server12EventHandler15onSessionKilledEPNS_7SessionE(void) {
@@ -75,7 +72,6 @@ int APS5_VABI _ZN4IPMI4impl11SessionImpl27respondToAsyncMethodRequestEjiPKvm(voi
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config27AsyncMethodInvocationConfigC2Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Server12EventHandler21onAsyncMethodDispatchEPNS_7SessionEjjPKNS_8DataInfoEj(void) {
@@ -135,7 +131,6 @@ int APS5_VABI _ZN4IPMI4impl11SessionImpl7destroyEv(void) {
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config27AsyncMethodInvocationConfigC1Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI4impl11SessionImpl6getMsgEjPvPmmPj(void) {
@@ -155,8 +150,8 @@ int APS5_VABI _ZN4IPMI6ClientD0Ev(void) {
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6createEPPS0_PKNS0_6ConfigEPvS6_(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    constexpr int IPMI_ERROR_NOT_AVAILABLE = -2137653184;
+    return IPMI_ERROR_NOT_AVAILABLE;
 }
 int APS5_VABI _ZN4IPMI6ServerC2Ev(void) {
     NotImplemented_nid_no_patch(__func__);
@@ -187,15 +182,12 @@ int APS5_VABI _ZN4IPMI4impl11SessionImpl9getServerEv(void) {
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6ConfigC1Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config26SyncMethodInvocationConfigC2Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Client6Config14MsgQueueConfigC2Ev(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI _ZN4IPMI6Server6ConfigC2Ev(void) {

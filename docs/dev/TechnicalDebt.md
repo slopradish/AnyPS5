@@ -16,6 +16,15 @@ Throughout the project, every function at every stage either **does exactly what
 
 ### Unknown function info
 
+- The `IPMI::Client::Config` and nested `MsgQueueConfig`, `SyncMethodInvocationConfig` and
+  `AsyncMethodInvocationConfig` constructors (`_ZN4IPMI6Client6Config…C1/C2Ev`) are silent no-ops since the
+  wolverine-bringup's first run of the Silksong Conversion SDK: the title's own save-data module creates one
+  during its initialization and fills the object from a template of its own afterwards (call sites in its
+  module's disassembly), so the console-default field values produced by the console constructor are never
+  observable through these calls. `IPMI::Client::create` returns the assumed unavailable error
+  `-2137653184` (the save-data module only branches on the sign, verified in the same disassembly) and the
+  session messaging functions still fail loud as unimplemented.
+
 - AudioIn and NpSessionSignaling exports added without an implementation have assumed signatures
 - `sceNetCtlGetIfStat` signature and 56-byte layout come from PPSA09030's call site and SharpProspero's `SceNetCtlIfStat`; the device kind is always 0, the byte counters are the host's totals over its up non-loopback hardware interfaces (not "since cleared"), and the not-connected result is assumed to match `sceNetCtlGetState`
 - Font, Http2, Net, Ssl, SystemService and libkernel exports imported by PPSA12544 and added without an implementation have unknown signatures
