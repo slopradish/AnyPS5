@@ -661,16 +661,19 @@ std::uint64_t storageBudget(const Context& context, std::uint64_t required = 0) 
         const auto prevEvictions = cached.evictions;
         cached.evictions = evictions;
         const auto floor = StorageTextureBudget(context.memory, &*reported, sampled, storage);
-        cached.budget = std::max(floor, cached.budget);
         cached.ceiling = StorageTextureCeiling(context.memory, &*reported);
+        cached.budget = floor;
         if (const auto heap = largestDeviceLocalHeap(context.memory)) {
             const auto reportedBudget = reported->heapBudget[*heap];
             const auto usage = reported->heapUsage[*heap];
             const auto cap = storageBudgetCap(context.memory, &*reported, floor);
-            const auto adjusted = NextStorageBudget(cached.budget, floor, cap, reportedBudget, usage, evictions - prevEvictions);
-            if (adjusted != cached.budget) {
-                std::fprintf(stderr, "[textures] storage cache budget %llu MiB -> %llu MiB (evictions %llu, heap uses %llu of %llu MiB)\n", static_cast<unsigned long long>(cached.budget >> 20u), static_cast<unsigned long long>(adjusted >> 20u), static_cast<unsigned long long>(evictions - prevEvictions), static_cast<unsigned long long>(usage >> 20u), static_cast<unsigned long long>(reportedBudget >> 20u));
-                cached.budget = adjusted;
+            const auto reserve = std::max<std::uint64_t>(2048ull << 20u, reportedBudget / 8u);
+            if (usage + reserve <= reportedBudget) {
+                const auto adjusted = NextStorageBudget(cached.budget, floor, cap, reportedBudget, usage, evictions - prevEvictions);
+                if (adjusted != cached.budget) {
+                    std::fprintf(stderr, "[textures] storage cache budget %llu MiB -> %llu MiB (evictions %llu, heap uses %llu of %llu MiB)\n", static_cast<unsigned long long>(cached.budget >> 20u), static_cast<unsigned long long>(adjusted >> 20u), static_cast<unsigned long long>(evictions - prevEvictions), static_cast<unsigned long long>(usage >> 20u), static_cast<unsigned long long>(reportedBudget >> 20u));
+                    cached.budget = adjusted;
+                }
             }
         }
     };
