@@ -203,6 +203,15 @@ class UnwrapTest(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertFalse(output.exists())
 
+    def test_a_segment_without_a_vaddr_is_read_through_the_load_that_holds_its_offset(self):
+        segments = default_segments() + [(3, 4, 0x1274, 0, 0x10, 1)]
+        container = build_container(segments, default_records(), default_payloads())
+        result, output = self.convert(container)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data, headers = read_program_headers(output)
+        interp = [header for header in headers if header[0] == 3][0]
+        self.assertEqual(data[interp[2]:interp[2] + interp[5]], container[0x840:0x850])
+
     def test_tls_layouts_the_relinker_rejects_are_refused(self):
         cases = ((3, 0x20, 0x40, "segment 1 alignment is not a power of two"),
                  (6, 0x20, 0x40, "segment 1 alignment is not a power of two"),
