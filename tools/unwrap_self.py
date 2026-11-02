@@ -12,7 +12,9 @@ differ inside a container:
     0x800 holds the data of the program header whose index is in flags bits 20
     and up. Segments the table does not cover are placed by the vaddr to file
     mapping of the PT_LOAD that contains them, including a PT_PHDR at vaddr zero.
-    Other segments without a vaddr that follow the last recorded one in the ELF
+    A segment without a vaddr whose declared offset lies inside a file-backed
+    PT_LOAD is read through that load, so it keeps the load's shift. Other
+    segments without a vaddr that follow the last recorded one in the ELF
     are stored right after it, back to back in ELF order, except a PT_NOTE, which
     the container leaves out and which is emitted without file bytes. Some dumps
     end right after the recorded ones and leave out the version segment as well,
@@ -168,12 +170,26 @@ def place_segments(data, headers, records):
             headers[target]["source"] = segment
             placed.add(target)
             used.add(index)
+    assigned = set(placed)
+
+    def host_for_offset(header):
+        found = None
+        for candidate in headers:
+            if candidate["index"] not in assigned or candidate["index"] == header["index"] or not candidate["size"]:
+                continue
+            if (candidate["offset"] <= header["offset"]
+                    and header["size"] <= candidate["size"] - (header["offset"] - candidate["offset"])):
+                if found is None or candidate["size"] < found["size"]:
+                    found = candidate
+        return found
+
     recorded = [header for header in headers if header["index"] in placed and header["vaddr"] == 0 and header["type"] != PT_LOAD]
     if recorded:
         last = max(recorded, key=lambda header: header["offset"])
         cursor = last["source"] + last["size"]
         trailing = [header for header in headers if header["index"] not in placed and header["vaddr"] == 0
-                    and header["type"] != PT_LOAD and header["size"] and header["offset"] > last["offset"]]
+                    and header["type"] != PT_LOAD and header["size"] and header["offset"] > last["offset"]
+                    and host_for_offset(header) is None]
         for header in sorted(trailing, key=lambda header: header["offset"]):
             placed.add(header["index"])
             if header["type"] == PT_NOTE:
@@ -216,6 +232,14 @@ def place_segments(data, headers, records):
                         and header["source"] == host["source"] + offset):
                     header["host"] = host
             if header["size"] and (tail is None or header["offset"] > tail[0]):
+                tail = (header["offset"], header["source"] - header["offset"])
+            continue
+        host = host_for_offset(header) if header["size"] else None
+        if host is not None:
+            header["host"] = host
+            header["source"] = host["source"] + (header["offset"] - host["offset"])
+            assigned.add(header["index"])
+            if tail is None or header["offset"] > tail[0]:
                 tail = (header["offset"], header["source"] - header["offset"])
             continue
         if header["vaddr"] != 0 or header["type"] == PT_PHDR:
