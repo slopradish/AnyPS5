@@ -335,6 +335,7 @@ struct SpirvTarget {
     std::uint32_t maxImageArrayLayers = 0;
     bool narrowSubgroupClock = false;
     bool fixedPushSlots = false;
+    bool shaderImageMinLod = false;
     bool float64DenormPreserve = false;
     bool registrationModules = false;
     std::uint32_t registrationWordLimit = 200000u;
