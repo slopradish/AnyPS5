@@ -10,8 +10,10 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libkernel/AppMetadata/include/AppMetadata.hpp"
 #include "Ngs2Internal.hpp"
 
 #ifdef APS5_NGS2_PS4_LIBRARY
@@ -45,13 +47,73 @@ static std::size_t RackOptionSize(std::uint32_t rackId) {
     }
 }
 
+struct Ps4RackOptionWire {
+    std::size_t size;
+    char name[16];
+    std::uint32_t flags;
+    std::uint32_t max_grain_samples;
+    std::uint32_t max_voices;
+    std::uint32_t max_input_delay_blocks;
+    std::uint32_t max_matrices;
+    std::uint32_t max_ports;
+    std::uint32_t max_voice_channels;
+    std::uint32_t max_output_channels;
+    std::uint32_t reserved[18];
+};
+static_assert(sizeof(Ps4RackOptionWire) == 128);
+
+static bool Ps4Process() {
+    try {
+        const auto titleId = GetAppTitleId_nid_postfix();
+        const std::string_view id(titleId.value, strnlen(titleId.value, sizeof(titleId.value)));
+        return id.starts_with("CUSA");
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+static std::size_t Ps4RackOptionSize(std::uint32_t rackId) {
+    switch (rackId) {
+        case SCE_NGS2_RACK_ID_SAMPLER: return 168;
+        case SCE_NGS2_RACK_ID_SUBMIXER: return 152;
+        case SCE_NGS2_RACK_ID_MASTERING: return 136;
+        case SCE_NGS2_RACK_ID_REVERB: return 136;
+        case SCE_NGS2_RACK_ID_CUSTOM_SAMPLER: return 1256;
+        case SCE_NGS2_RACK_ID_CUSTOM_SUBMIXER: return 1240;
+        case SCE_NGS2_RACK_ID_CUSTOM_MASTERING: return 1240;
+        default: return RackOptionSize(rackId);
+    }
+}
+
+static std::size_t WireRackOptionSize(std::uint32_t rackId) {
+    return Ps4Process() ? Ps4RackOptionSize(rackId) : RackOptionSize(rackId);
+}
+
+static void ConvertPs4RackOption(const Ps4RackOptionWire* wire, std::size_t wireSize, RackOptions& options) {
+    options = {};
+    auto* bytes = reinterpret_cast<std::uint8_t*>(&options);
+    std::memcpy(bytes + offsetof(Ngs2RackOption, name), wire->name, sizeof(wire->name));
+    options.common.flags = wire->flags;
+    options.common.max_grain_samples = wire->max_grain_samples;
+    options.common.max_voices = wire->max_voices;
+    options.common.max_input_delay_blocks = wire->max_input_delay_blocks;
+    options.common.max_matrices = wire->max_matrices;
+    options.common.max_ports = wire->max_ports;
+    options.common.max_voice_channels = wire->max_voice_channels;
+    options.common.max_output_channels = wire->max_output_channels;
+    options.common.size = sizeof(Ngs2RackOption);
+    const auto tail = wireSize - sizeof(Ps4RackOptionWire);
+    if (tail != 0)
+        std::memcpy(bytes + sizeof(Ngs2RackOption), reinterpret_cast<const std::uint8_t*>(wire) + sizeof(Ps4RackOptionWire), tail);
+}
+
 static RackOptions DefaultRackOption(std::uint32_t rackId) {
     if (rackId == SCE_NGS2_RACK_ID_CUSTOM_SAMPLER || rackId == SCE_NGS2_RACK_ID_CUSTOM_SUBMIXER || rackId == SCE_NGS2_RACK_ID_CUSTOM_MASTERING) {
         throw std::runtime_error("NGS2: default custom rack options are not implemented");
     }
     RackOptions options{};
     auto& common = options.common;
-    common.size = RackOptionSize(rackId);
+    common.size = WireRackOptionSize(rackId);
     common.max_grain_samples = 512;
     common.max_voices = 1;
     common.max_input_delay_blocks = 1;
@@ -101,23 +163,28 @@ static std::uint32_t RackMaxChannels(std::uint32_t rackId, const RackOptions& op
 
 static int CheckedRackOption(std::uint32_t rackId, const Ngs2RackOption* option, RackOptions& options) {
     const auto size = RackOptionSize(rackId);
+    const auto wireSize = WireRackOptionSize(rackId);
     if (option == nullptr) {
         options = DefaultRackOption(rackId);
         return SCE_NGS2_OK;
     }
-    if (option->size != size) {
+    if (option->size != wireSize) {
         if (std::getenv("APS5_NGS2_TRACE_PARAMS") != nullptr) {
             std::fprintf(stderr, "[ngs2] rack option id=0x%x size=%u expected=%u:",
-                         static_cast<unsigned>(rackId), static_cast<unsigned>(option->size), static_cast<unsigned>(size));
+                         static_cast<unsigned>(rackId), static_cast<unsigned>(option->size), static_cast<unsigned>(wireSize));
             const auto* bytes = reinterpret_cast<const std::uint8_t*>(option);
-            const std::size_t limit = std::min<std::size_t>(option->size, 176u);
+            const std::size_t limit = std::min<std::size_t>(option->size, 1304u);
             for (std::size_t i = 0; i < limit; ++i) std::fprintf(stderr, " %02x", bytes[i]);
             std::fprintf(stderr, "\n");
         }
         throw std::invalid_argument("NGS2: unexpected rack option size " + std::to_string(option->size));
     }
-    options = {};
-    std::memcpy(&options, option, size);
+    if (wireSize == size) {
+        options = {};
+        std::memcpy(&options, option, size);
+    } else {
+        ConvertPs4RackOption(reinterpret_cast<const Ps4RackOptionWire*>(option), wireSize, options);
+    }
     if (!PS4_LIBRARY && (rackId == SCE_NGS2_RACK_ID_SAMPLER || rackId == SCE_NGS2_RACK_ID_CUSTOM_SAMPLER)) {
         const auto blocks = rackId == SCE_NGS2_RACK_ID_SAMPLER ? options.sampler.max_waveform_blocks : options.customSampler.max_waveform_blocks;
         if (blocks == 0 || blocks > MAX_WAVEFORM_BLOCKS) return SCE_NGS2_ERROR_INVALID_NUM_WAVEFORM_BLOCKS;

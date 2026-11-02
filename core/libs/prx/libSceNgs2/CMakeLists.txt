@@ -1,6 +1,6 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/../libSceNgs2.native/Ngs2Library.cmake)
 add_sce_ngs2_library(libSceNgs2)
-target_compile_definitions(libSceNgs2 PUBLIC APS5_NGS2_PS4_LIBRARY)
+target_compile_definitions(libSceNgs2 PRIVATE APS5_NGS2_PS4_LIBRARY)
 target_sources(libSceNgs2 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/PendingExports.cpp)
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/PendingExports.cpp PROPERTIES COMPILE_OPTIONS -fvisibility=default)
 
