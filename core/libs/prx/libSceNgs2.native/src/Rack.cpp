@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -103,7 +105,17 @@ static int CheckedRackOption(std::uint32_t rackId, const Ngs2RackOption* option,
         options = DefaultRackOption(rackId);
         return SCE_NGS2_OK;
     }
-    if (option->size != size) throw std::invalid_argument("NGS2: unexpected rack option size " + std::to_string(option->size));
+    if (option->size != size) {
+        if (std::getenv("APS5_NGS2_TRACE_PARAMS") != nullptr) {
+            std::fprintf(stderr, "[ngs2] rack option id=0x%x size=%u expected=%u:",
+                         static_cast<unsigned>(rackId), static_cast<unsigned>(option->size), static_cast<unsigned>(size));
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(option);
+            const std::size_t limit = std::min<std::size_t>(option->size, 176u);
+            for (std::size_t i = 0; i < limit; ++i) std::fprintf(stderr, " %02x", bytes[i]);
+            std::fprintf(stderr, "\n");
+        }
+        throw std::invalid_argument("NGS2: unexpected rack option size " + std::to_string(option->size));
+    }
     options = {};
     std::memcpy(&options, option, size);
     if (!PS4_LIBRARY && (rackId == SCE_NGS2_RACK_ID_SAMPLER || rackId == SCE_NGS2_RACK_ID_CUSTOM_SAMPLER)) {
@@ -119,7 +131,18 @@ static int CheckedRackOption(std::uint32_t rackId, const Ngs2RackOption* option,
     if ((rackId == SCE_NGS2_RACK_ID_CUSTOM_SUBMIXER || rackId == SCE_NGS2_RACK_ID_CUSTOM_MASTERING) && (options.customSubmixer.max_inputs == 0 || options.customSubmixer.max_inputs > SCE_NGS2_CUSTOM_SUBMIXER_MAX_INPUTS)) {
         throw std::runtime_error("NGS2: custom submixer racks with " + std::to_string(options.customSubmixer.max_inputs) + " inputs are not implemented");
     }
-    if (options.common.max_voices == 0 || maxChannels == 0) throw std::invalid_argument("NGS2: invalid rack voice or channel count");
+    if (((rackId == SCE_NGS2_RACK_ID_SAMPLER || rackId == SCE_NGS2_RACK_ID_CUSTOM_SAMPLER) && options.common.max_voices == 0) || maxChannels == 0) {
+        if (std::getenv("APS5_NGS2_TRACE_PARAMS") != nullptr) {
+            std::fprintf(stderr, "[ngs2] rack check id=0x%x voices=%u channels=%u grain=%u:", static_cast<unsigned>(rackId),
+                         static_cast<unsigned>(options.common.max_voices), static_cast<unsigned>(maxChannels),
+                         static_cast<unsigned>(options.common.max_grain_samples));
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(option);
+            const std::size_t limit = std::min<std::size_t>(option->size, 1304u);
+            for (std::size_t i = 0; i < limit; ++i) std::fprintf(stderr, " %02x", bytes[i]);
+            std::fprintf(stderr, "\n");
+        }
+        throw std::invalid_argument("NGS2: invalid rack voice or channel count");
+    }
     int result = SCE_NGS2_OK;
     if (rackId == SCE_NGS2_RACK_ID_CUSTOM_SAMPLER) result = Ngs2CheckCustomRack(rackId, options.customSampler.custom_rack_option, 0);
     if (rackId == SCE_NGS2_RACK_ID_CUSTOM_SUBMIXER || rackId == SCE_NGS2_RACK_ID_CUSTOM_MASTERING) result = Ngs2CheckCustomRack(rackId, options.customSubmixer.custom_rack_option, options.customSubmixer.max_inputs);
