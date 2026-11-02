@@ -677,6 +677,15 @@ int APS5_VABI sceKernelGetAppInfo(int pid, void* info) {
     return 0;
 }
 
+int APS5_VABI sceKernelGetAppCategoryType(int pid, std::uint32_t* categoryType) {
+    const bool own = pid == getpid_nid_postfix();
+    if (!own && pid != 0) NotImplemented_nid_no_patch("sceKernelGetAppCategoryType: a pid other than the caller's and 0");
+    if (categoryType == nullptr) return 0x80020002;
+    constexpr std::uint32_t GameCategory = 0x10000;
+    *categoryType = GameCategory;
+    return 0;
+}
+
 int APS5_VABI getuid_nid_postfix(void) {
     return 0;
 }
