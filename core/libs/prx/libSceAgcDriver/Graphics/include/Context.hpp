@@ -359,6 +359,15 @@ struct Context {
             }
         }
         const auto host = HostMemoryTypeWithRoom(mask, reported, bytes);
+        if (!host) {
+            if (!HostMemoryType(mask)) return type;
+            static std::atomic<std::uint64_t> kept{0}, keptBytes{0};
+            const auto count = kept.fetch_add(1) + 1;
+            const auto total = keptBytes.fetch_add(bytes) + bytes;
+            if (count <= 5 || (count & (count - 1)) == 0) std::fprintf(stderr, "[gpu] %s: device-local heap %u uses %llu of its %llu MiB budget and no allowed host heap has room, %llu bytes kept in device-local memory type %u; %llu such allocations, %llu MiB\n", what, heap, static_cast<unsigned long long>(usage >> 20u), static_cast<unsigned long long>(budget >> 20u), static_cast<unsigned long long>(bytes), type, static_cast<unsigned long long>(count), static_cast<unsigned long long>(total >> 20u));
+            return type;
+        }
+        const auto hostHeap = memory.memoryTypes[*host].heapIndex;
         static std::atomic<std::uint64_t> placements{0}, placedBytes{0};
         const auto count = placements.fetch_add(1) + 1;
         const auto total = placedBytes.fetch_add(bytes) + bytes;

@@ -91,6 +91,8 @@ void ReclaimTests() {
     choose("a partial release that the budget then shows", 3000 * MiB, 2990 * MiB, 32 * MiB, 2900 * MiB, DeviceType, 64 * MiB);
     choose("a partial release the budget does not show", 3000 * MiB, 2990 * MiB, 32 * MiB, 2990 * MiB, HostType, 64 * MiB);
     choose("caches release nothing", 3000 * MiB, 2990 * MiB, 0, 2990 * MiB, HostType, 64 * MiB);
+}
+
 void HostHeapTests() {
     const std::uint32_t both = (1u << HostType) | (1u << DeviceType);
     reportedHostBudget = 8000 * MiB;

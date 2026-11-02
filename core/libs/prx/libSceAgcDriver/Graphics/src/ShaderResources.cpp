@@ -599,6 +599,18 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
 std::uint64_t storageCacheBytes();
 std::uint64_t storageBudgetCap(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t floor);
 std::atomic<std::uint64_t> storageBudgetEvictions{0};
+std::optional<std::uint32_t> largestDeviceLocalHeap(const VkPhysicalDeviceMemoryProperties& memory);
+
+std::uint64_t storageBudgetCap(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, const std::uint64_t floor) {
+    const auto heap = largestDeviceLocalHeap(memory);
+    const auto heapBytes = heap ? memory.memoryHeaps[*heap].size : 0u;
+    if (reported == nullptr || !heap) return StorageBudgetCap(heapBytes, 0u, 0u, 0u, 0u, floor);
+    const auto sampled = SampledTextureMemory();
+    const auto caches = sampled + storageCacheBytes();
+    const auto sampledBudget = SampledTextureBudget(memory, reported, caches, 0);
+    const auto sampledRemaining = sampledBudget > sampled ? sampledBudget - sampled : 0u;
+    return StorageBudgetCap(heapBytes, reported->heapBudget[*heap], reported->heapUsage[*heap], caches, sampledRemaining, floor);
+}
 
 std::optional<std::uint32_t> largestDeviceLocalHeap(const VkPhysicalDeviceMemoryProperties& memory) {
     std::optional<std::uint32_t> heap;
@@ -618,8 +630,6 @@ std::uint64_t forcedCacheBudget() {
     }();
     return forced;
 }
-
-static std::atomic<std::uint64_t> storageBudgetEvictions{0};
 
 std::uint64_t storageBudget(const Context& context, std::uint64_t required = 0) {
     const auto forced = forcedCacheBudget();
@@ -1391,8 +1401,6 @@ std::uint64_t NextStorageBudget(const std::uint64_t current, const std::uint64_t
     if (evictions >= 16u && current < cap && usage + step + reserve <= reportedBudget) return std::min(cap, current + step);
     return current;
 }
-
-std::uint64_t SampledTextureBudget(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t textureBytes) {
 
 std::uint64_t StorageTextureBudget(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t sampledBytes, std::uint64_t storageBytes) {
     const auto heap = largestDeviceLocalHeap(memory);
