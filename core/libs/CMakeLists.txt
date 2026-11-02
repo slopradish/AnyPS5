@@ -57,7 +57,8 @@ function(configure_windows_unwind target)
             message(FATAL_ERROR "Windows DWARF unwinding requires objcopy")
         endif()
         add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND "${CMAKE_OBJCOPY}" --rename-section .eh_frame=.ehfram --rename-section .eh_fram=.ehfram "$<TARGET_FILE:${target}>"
+                COMMAND "${CMAKE_OBJCOPY}" --rename-section .eh_frame=.ehfram --rename-section .eh_fram=.ehfram "$<TARGET_FILE:${target}>" "$<TARGET_FILE:${target}>.unwind"
+                COMMAND "${CMAKE_COMMAND}" -E rename "$<TARGET_FILE:${target}>.unwind" "$<TARGET_FILE:${target}>"
                 VERBATIM
         )
     endif()
