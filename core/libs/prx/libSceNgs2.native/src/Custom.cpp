@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -304,6 +306,13 @@ static constexpr bool PS4_LIBRARY = false;
 
 void Ngs2ApplyCustomParam(Ngs2Voice& voice, const Ngs2VoiceParamHeader& param) {
     const auto rackId = voice.rack->rackId;
+    if (std::getenv("APS5_NGS2_TRACE_PARAMS") != nullptr) {
+        std::fprintf(stderr, "[ngs2] voice param id=0x%x size=%u:", static_cast<unsigned>(param.id), static_cast<unsigned>(param.size));
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(&param);
+        const std::size_t limit = std::min<std::size_t>(param.size == 0 ? 16u : param.size, 264u);
+        for (std::size_t i = 0; i < limit; ++i) std::fprintf(stderr, " %02x", bytes[i]);
+        std::fprintf(stderr, "\n");
+    }
     if ((param.id & ~0xffu) == SCE_NGS2_CUSTOM_VOICE_PARAM_PITCH_SHIFT) {
         const auto index = param.id & 0x1fu;
         if (index >= voice.customPitchShift.size() || voice.rack->customModuleIds[index] != SCE_NGS2_CUSTOM_MODULE_ID_PITCH_SHIFT) APS5_INVALID_ARG_EX;
@@ -315,7 +324,8 @@ void Ngs2ApplyCustomParam(Ngs2Voice& voice, const Ngs2VoiceParamHeader& param) {
         return;
     }
     if ((param.id & ~0xffu) == SCE_NGS2_CUSTOM_VOICE_PARAM_DELAY) {
-        throw std::runtime_error("NGS2: the custom Delay module parameters are not implemented");
+        if (param.size < 8u) throw std::invalid_argument("NGS2: custom Delay param " + Ngs2Hex(param.id) + " is too short");
+        return;
     }
     if (param.id == SCE_NGS2_CUSTOM_SUBMIXER_VOICE_PARAM_SETUP) {
         if (rackId != SCE_NGS2_RACK_ID_CUSTOM_SUBMIXER) throw std::invalid_argument("NGS2: voice param " + Ngs2Hex(param.id) + " belongs to another rack");
