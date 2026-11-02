@@ -744,7 +744,7 @@ static void TestCustomLegacyUserFx(std::uint32_t moduleIndex) {
     Require(ControlThrows<std::invalid_argument>(custom, SCE_NGS2_CUSTOM_VOICE_PARAM_USER_FX | 31, Ngs2CustomVoiceUserFxParam{{}, ProcessLegacy, 0, 0, 0}));
 
     Require(CreateThrows<std::runtime_error>(LegacyRackOption(&header, moduleIndex)));
-    Require(ControlThrows<std::runtime_error>(custom, 0x40001d00,
+    Require(ControlThrows<std::invalid_argument>(custom, 0x40001d00,
                 Ngs2CustomVoiceUserFxParam{{}, ProcessLegacy, reinterpret_cast<std::uintptr_t>(&state), 123, 456}));
 
     state.result = -1;
@@ -825,16 +825,25 @@ static void TestCustomDelay(std::uint32_t count, const DelayOption& delay) {
     for (std::uint32_t grain = 0; grain < 3; ++grain) checkGrain(grain);
 
     LegacyUserFxState state{};
-    for (std::uint32_t index = 0; index < 256; ++index) {
+    for (std::uint32_t index = 0; index < count; ++index) {
+        Ngs2CustomVoiceUserFxParam param{{sizeof(Ngs2CustomVoiceUserFxParam), 0, 0x40001d00 | index},
+                                       ProcessLegacy, reinterpret_cast<std::uintptr_t>(&state), 123, 456};
+        std::string error;
+        try {
+            sceNgs2VoiceControl(custom, &param.header);
+        } catch (const std::exception& caught) {
+            error = caught.what();
+        }
+        Require(error.empty());
+    }
+    for (std::uint32_t index = count; index < count + 2; ++index) {
         Ngs2CustomVoiceUserFxParam param{{sizeof(Ngs2CustomVoiceUserFxParam), 0, 0x40001d00 | index},
                                        ProcessLegacy, reinterpret_cast<std::uintptr_t>(&state), 123, 456};
         bool rejected = false;
         try {
             sceNgs2VoiceControl(custom, &param.header);
-
-        } catch (const std::runtime_error& error) {
-            const std::string message = error.what();
-            rejected = message.find("Delay") != std::string::npos && message.find("not implemented") != std::string::npos;
+        } catch (const std::invalid_argument&) {
+            rejected = true;
         }
         Require(rejected);
     }

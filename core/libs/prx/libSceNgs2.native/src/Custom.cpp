@@ -324,6 +324,8 @@ void Ngs2ApplyCustomParam(Ngs2Voice& voice, const Ngs2VoiceParamHeader& param) {
         return;
     }
     if ((param.id & ~0xffu) == SCE_NGS2_CUSTOM_VOICE_PARAM_DELAY) {
+        const auto index = param.id & 0x1fu;
+        if (index >= voice.rack->customModuleIds.size() || voice.rack->customModuleIds[index] != SCE_NGS2_CUSTOM_MODULE_ID_DELAY) APS5_INVALID_ARG_EX;
         if (param.size < 8u) throw std::invalid_argument("NGS2: custom Delay param " + Ngs2Hex(param.id) + " is too short");
         return;
     }
