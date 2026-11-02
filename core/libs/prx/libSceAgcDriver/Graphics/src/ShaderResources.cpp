@@ -597,6 +597,8 @@ std::shared_ptr<StorageTexture> sampledStorageSource(const Context& context, con
 }
 
 std::uint64_t storageCacheBytes();
+std::uint64_t storageBudgetCap(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t floor);
+std::atomic<std::uint64_t> storageBudgetEvictions{0};
 
 std::optional<std::uint32_t> largestDeviceLocalHeap(const VkPhysicalDeviceMemoryProperties& memory) {
     std::optional<std::uint32_t> heap;
@@ -617,6 +619,8 @@ std::uint64_t forcedCacheBudget() {
     return forced;
 }
 
+static std::atomic<std::uint64_t> storageBudgetEvictions{0};
+
 std::uint64_t storageBudget(const Context& context, std::uint64_t required = 0) {
     const auto forced = forcedCacheBudget();
     if (forced != 0) return forced;
@@ -627,12 +631,14 @@ std::uint64_t storageBudget(const Context& context, std::uint64_t required = 0) 
         std::chrono::steady_clock::time_point read{};
         std::uint64_t budget{0};
         std::uint64_t ceiling{0};
+        std::uint64_t evictions{0};
     } cached;
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard lock(cached.mutex);
     std::optional<VkPhysicalDeviceMemoryBudgetPropertiesEXT> reported;
     std::uint64_t sampled = 0;
     std::uint64_t storage = 0;
+    const auto evictions = storageBudgetEvictions.load(std::memory_order_relaxed);
     const auto read = [&] {
         reported.emplace(VkPhysicalDeviceMemoryBudgetPropertiesEXT{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT});
         VkPhysicalDeviceMemoryProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
@@ -642,12 +648,25 @@ std::uint64_t storageBudget(const Context& context, std::uint64_t required = 0) 
         cached.read = now;
         sampled = SampledTextureMemory();
         storage = storageCacheBytes();
-        cached.budget = StorageTextureBudget(context.memory, &*reported, sampled, storage);
+        const auto prevEvictions = cached.evictions;
+        cached.evictions = evictions;
+        const auto floor = StorageTextureBudget(context.memory, &*reported, sampled, storage);
+        cached.budget = std::max(floor, cached.budget);
         cached.ceiling = StorageTextureCeiling(context.memory, &*reported);
+        if (const auto heap = largestDeviceLocalHeap(context.memory)) {
+            const auto reportedBudget = reported->heapBudget[*heap];
+            const auto usage = reported->heapUsage[*heap];
+            const auto cap = storageBudgetCap(context.memory, &*reported, floor);
+            const auto adjusted = NextStorageBudget(cached.budget, floor, cap, reportedBudget, usage, evictions - prevEvictions);
+            if (adjusted != cached.budget) {
+                std::fprintf(stderr, "[textures] storage cache budget %llu MiB -> %llu MiB (evictions %llu, heap uses %llu of %llu MiB)\n", static_cast<unsigned long long>(cached.budget >> 20u), static_cast<unsigned long long>(adjusted >> 20u), static_cast<unsigned long long>(evictions - prevEvictions), static_cast<unsigned long long>(usage >> 20u), static_cast<unsigned long long>(reportedBudget >> 20u));
+                cached.budget = adjusted;
+            }
+        }
     };
     if (cached.device != context.physical || now - cached.read >= std::chrono::seconds(1)) read();
     const auto needed = std::min(required, cached.ceiling);
-    if (needed > cached.budget && context.bufferPool != nullptr && context.bufferPool->ReclaimIdleDevice(needed - cached.budget, now) != 0) read();
+    if (needed > cached.budget && context.bufferPool != nullptr && context.bufferPool->ReclaimIdleDevice(needed - cached.budget, now) != 0) { reported.reset(); read(); }
     if (reported) MemoryAccounting::Report(context, *reported, sampled, storage, cached.budget);
     return cached.budget;
 }
@@ -1296,7 +1315,10 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
             if (auto* recorder = Recorder::Active(); keepNew && recorder != nullptr && GuestMemory::GpuMutex().HeldByThisThread() && recorder->Recording()) recorder->Keep(entry.texture);
             entry.accounted = heldBytes(*entry.texture);
             const auto budget = storageBudget(context, cache.bytes + entry.accounted);
-            while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) evicted.push_back(evictStorage(cache, std::prev(cache.entries.end())));
+            while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) {
+                evicted.push_back(evictStorage(cache, std::prev(cache.entries.end())));
+                storageBudgetEvictions.fetch_add(1, std::memory_order_relaxed);
+            }
             cache.bytes += entry.accounted;
             texture = entry.texture;
             cache.entries.push_front(std::move(entry));
@@ -1328,6 +1350,24 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
 
 }
 
+// The storage cache's cap: half the heap, and no more than what is left of the device budget once
+// the space outside both texture caches, the headroom the sampled cache may still claim and the
+// reserve the growth check keeps are taken out. Growing into that space pushes the heap to its
+// budget, and the allocations that follow (sampled textures, device buffers, staging) fail before
+// the next budget read can shrink this cache again. The sampled cache's budget covers both caches,
+// so only its remaining headroom is held back; a sampled cache at or over its budget holds back
+// nothing and the storage cache may take the space.
+std::uint64_t StorageBudgetCap(const std::uint64_t heapBytes, const std::uint64_t reportedBudget, const std::uint64_t usage, const std::uint64_t cacheBytes, const std::uint64_t sampledRemaining, const std::uint64_t floor) {
+    std::uint64_t cap = heapBytes / 2u;
+    if (reportedBudget != 0) {
+        const auto reserve = std::max<std::uint64_t>(2048ull << 20u, reportedBudget / 8u);
+        const auto outside = usage - std::min(usage, cacheBytes);
+        const auto pool = reportedBudget > outside + reserve ? reportedBudget - outside - reserve : 0u;
+        cap = std::min(cap, pool > sampledRemaining ? pool - sampledRemaining : 0u);
+    }
+    return std::max(cap, floor);
+}
+
 std::uint64_t TextureCacheBudget(const VkPhysicalDeviceMemoryProperties& memory) {
     const auto heap = largestDeviceLocalHeap(memory);
     return std::max<std::uint64_t>(2048ull << 20u, heap ? memory.memoryHeaps[*heap].size / 4u : 0u);
@@ -1338,6 +1378,21 @@ std::uint64_t StorageTextureCeiling(const VkPhysicalDeviceMemoryProperties& memo
     if (reported == nullptr || !heap || reported->heapBudget[*heap] == 0) return TextureCacheBudget(memory);
     return std::max<std::uint64_t>(512ull << 20u, std::min<std::uint64_t>(memory.memoryHeaps[*heap].size / 2u, reported->heapBudget[*heap] / 2u));
 }
+
+// The storage cache's budget grows while it evicts under its own budget (its working set does not
+// fit) and shrinks again while the device's memory budget is under pressure, so a title whose
+// storage surfaces do not fit the initial share stops recreating them every frame. The thresholds
+// and the cap come from the measurement in the storage-cache debt entry.
+std::uint64_t NextStorageBudget(const std::uint64_t current, const std::uint64_t floor, const std::uint64_t cap, const std::uint64_t reportedBudget, const std::uint64_t usage, const std::uint64_t evictions) {
+    if (reportedBudget == 0) return current;
+    const auto reserve = std::max<std::uint64_t>(2048ull << 20u, reportedBudget / 8u);
+    const auto step = std::max<std::uint64_t>(current / 8u, 64ull << 20u);
+    if (usage + reserve > reportedBudget) return std::max(floor, current > step ? current - step : floor);
+    if (evictions >= 16u && current < cap && usage + step + reserve <= reportedBudget) return std::min(cap, current + step);
+    return current;
+}
+
+std::uint64_t SampledTextureBudget(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t textureBytes) {
 
 std::uint64_t StorageTextureBudget(const VkPhysicalDeviceMemoryProperties& memory, const VkPhysicalDeviceMemoryBudgetPropertiesEXT* reported, std::uint64_t sampledBytes, std::uint64_t storageBytes) {
     const auto heap = largestDeviceLocalHeap(memory);
