@@ -128,6 +128,40 @@ void screenshotBinding() {
     require(rejects("Screenshot = WHEEL:Up\n"), "the screenshot key refuses the mouse wheel");
 }
 
+void standardLayoutDefaults() {
+    useConfig("");
+    const auto configuration = Pad::LoadInputMapping();
+    const auto hasKey = [&configuration](Pad::PadButton button, SDL_Scancode key) {
+        for (const auto& binding : configuration.bindings) {
+            if (binding.control == Pad::InputControl::Button && binding.button == button && binding.key == key) return true;
+        }
+        return false;
+    };
+    const auto hasMouse = [&configuration](Pad::PadButton button, Pad::MouseButton mouseButton) {
+        for (const auto& binding : configuration.bindings) {
+            if (binding.control == Pad::InputControl::Button && binding.button == button && binding.mouseButton == mouseButton) return true;
+        }
+        return false;
+    };
+    require(hasKey(Pad::PadButton::Cross, SDL_SCANCODE_SPACE), "Cross is on Space by default");
+    require(hasKey(Pad::PadButton::Triangle, SDL_SCANCODE_E), "Triangle is on E by default");
+    require(hasKey(Pad::PadButton::Circle, SDL_SCANCODE_LCTRL), "Circle is on left Ctrl by default");
+    require(hasKey(Pad::PadButton::Options, SDL_SCANCODE_ESCAPE), "Options is on Escape by default");
+    require(hasKey(Pad::PadButton::L1, SDL_SCANCODE_Q), "L1 is on Q by default");
+    require(hasKey(Pad::PadButton::R1, SDL_SCANCODE_R), "R1 is on R by default");
+    require(hasKey(Pad::PadButton::Square, SDL_SCANCODE_F), "Square is on F by default");
+    require(hasKey(Pad::PadButton::L3, SDL_SCANCODE_LSHIFT), "L3 is on left Shift by default");
+    require(hasMouse(Pad::PadButton::R2, Pad::MouseButton::Left), "R2 is on the left mouse button by default");
+    require(hasMouse(Pad::PadButton::L2, Pad::MouseButton::Right), "L2 is on the right mouse button by default");
+    require(hasMouse(Pad::PadButton::L1, Pad::MouseButton::X1), "L1 is on the first side mouse button by default");
+    require(hasMouse(Pad::PadButton::R1, Pad::MouseButton::X2), "R1 is on the second side mouse button by default");
+    for (const auto& binding : configuration.bindings) {
+        const bool rightStick = binding.control == Pad::InputControl::RightStickLeft || binding.control == Pad::InputControl::RightStickRight ||
+            binding.control == Pad::InputControl::RightStickUp || binding.control == Pad::InputControl::RightStickDown;
+        require(!rightStick || binding.key == SDL_SCANCODE_UNKNOWN, "the right stick is driven by the mouse by default");
+    }
+}
+
 std::size_t padStatusBindingsOn(const Pad::InputConfiguration& configuration, SDL_Scancode key) {
     std::size_t count = 0;
     for (const auto& binding : configuration.bindings) count += binding.control == Pad::InputControl::ShowPadStatus && binding.key == key ? 1 : 0;
@@ -146,7 +180,7 @@ void padStatusBinding() {
     }
     require(padStatus == 1, "the pad status has more than one default input");
     require(onF9 == 1, "another default binding uses F9");
-    require(Pad::InputMapping.size() == 43, "the default bindings changed besides the pad status and host volume keys");
+    require(Pad::InputMapping.size() == 38, "the default bindings changed besides the pad status and host volume keys");
     useConfig("ShowPadStatus = KEY:F4\n");
     const auto moved = Pad::LoadInputMapping();
     require(padStatusBindingsOn(moved, SDL_SCANCODE_F4) == 1 && padStatusBindingsOn(moved, SDL_SCANCODE_F9) == 0, "the pad status key moves to another key");
@@ -478,6 +512,7 @@ int main() try {
     volumeUpAction();
     volumeUpDefault();
     mouseLookDefault();
+    standardLayoutDefaults();
     mouseLookParse();
     mouseLookReject();
     stickModifier();
