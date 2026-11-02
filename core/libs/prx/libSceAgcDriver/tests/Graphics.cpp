@@ -6308,6 +6308,42 @@ void oversizedDescriptorTests() {
     ::operator delete(block, std::align_val_t{blockBytes});
 }
 
+void viewAtRangeLimitTests() {
+    constexpr std::size_t blockBytes = 65536;
+    void* block = ::operator new(blockBytes, std::align_val_t{blockBytes});
+    std::memset(block, 0x5a, blockBytes);
+    {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, block, blockBytes, true, true, true);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    }
+    {
+        ShaderRecompiler::RecompileResult vertex;
+        ShaderRecompiler::RecompileResult fragment;
+        mock = MockVulkan{};
+        auto context = mockContext();
+        context.limits.minStorageBufferOffsetAlignment = 16;
+        const auto* view = static_cast<const std::byte*>(block) + 12;
+        vertex.bindings.push_back(makeBinding(Role::GuestBuffers, 0, 1, vsharp(block, 64)));
+        vertex.bindings.push_back(makeBinding(Role::GuestBuffers, 1, 1, vsharp(view, static_cast<std::uint32_t>(context.limits.maxStorageBufferRange))));
+        vertex.bindings.push_back(makeBinding(Role::ShaderData, 5, 1, ShaderDataWords({})));
+        vertex.shaderDataDwords = ShaderRecompiler::RuntimeAbi::ShaderDataDwords;
+        const auto color = AgcDriver::Graphics::DecodeState(makeState()).color;
+        {
+            AgcDriver::Graphics::ShaderResources resources(context, vertex, fragment, color, 0, 0);
+            const auto& write = findWrite(1);
+            Require(write.buffers.size() == 1 && write.buffers[0].range == context.limits.maxStorageBufferRange, "a V# of exactly the range limit at an unaligned address was not bound within the limit");
+        }
+        Require(mock.live == 0, "a V# of exactly the range limit leaked Vulkan objects");
+    }
+    {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, block);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    }
+    ::operator delete(block, std::align_val_t{blockBytes});
+}
+
 void guestBufferViewBytesTests() {
     using AgcDriver::Graphics::GuestBufferMemory;
     for (const std::uint64_t bytes : {2ull, 3ull, 4ull, 6ull, 7ull, 16ull, 4096ull, 4098ull}) {
@@ -12683,6 +12719,16 @@ void pipelineJournalTests(bool longPath = false, bool extended = false) {
         BuildPipelineStoreKey(partialKey, context, partialState, input, layouts.View(), shaders, VK_IMAGE_LAYOUT_GENERAL);
         BuildPipelineStoreKey(partialReplayed, context, partialDecoded.state, partialDecoded.vertexInput, layouts.View(), shaders, partialDecoded.attachmentLayout);
         Require(partialKey != original && partialKey == partialReplayed, "the decoded partial write state keys another pipeline");
+        auto layeredPartialState = partialState;
+        layeredPartialState.meshLayerBase = 2048u;
+        layeredPartialState.meshLayerCount = 32u;
+        GraphicsPipelineRecipe layeredPartialDecoded;
+        Require(DecodeGraphicsPipelineRecipe(EncodeGraphicsPipelineRecipe(MakeGraphicsPipelineRecipe(layeredPartialState, input, layouts.View(), shaders, VK_IMAGE_LAYOUT_GENERAL)), layeredPartialDecoded), "the layered partial write recipe does not decode");
+        Require(layeredPartialDecoded.state.meshLayerBase == 2048u && layeredPartialDecoded.state.meshLayerCount == 32u && layeredPartialDecoded.state.colors[0].partialWriteMask == 0xf000u, "the recipe lost mesh layers or the partial write mask");
+        std::vector<std::byte> layeredPartialKey, layeredPartialReplayed;
+        BuildPipelineStoreKey(layeredPartialKey, context, layeredPartialState, input, layouts.View(), shaders, VK_IMAGE_LAYOUT_GENERAL);
+        BuildPipelineStoreKey(layeredPartialReplayed, context, layeredPartialDecoded.state, layeredPartialDecoded.vertexInput, layouts.View(), shaders, layeredPartialDecoded.attachmentLayout);
+        Require(layeredPartialKey != partialKey && layeredPartialKey == layeredPartialReplayed, "the decoded layered partial write state keys another pipeline");
         auto movedState = state;
         movedState.viewport.x = 5;
         movedState.colors[0].address = 0x9000;
@@ -12835,17 +12881,21 @@ void pipelineJournalTests(bool longPath = false, bool extended = false) {
             Require(cancelled->Done() && after.replayFailed == 0 && after.replayRejected == 0 && after.replayedGraphics + after.replayPresent <= before.replayedGraphics + before.replayPresent + 1, "a cancelled replay did not stop cleanly");
         }
         {
-            const std::uint32_t meshWithoutOutputSize = 2u;
-            std::fstream file(journalFile, std::ios::in | std::ios::out | std::ios::binary);
-            file.seekp(4);
-            file.write(reinterpret_cast<const char*>(&meshWithoutOutputSize), sizeof(meshWithoutOutputSize));
-            file.close();
-            Require(file.good(), "the journal header could not be rewritten");
-            auto stale = StartPipelineJournalReplay(context, fingerprint, hooks);
-            Require(stale != nullptr, "the replay of a journal in the previous format did not start");
-            stale->Wait();
-            const auto discarded = PipelineJournalTotals();
-            Require(discarded.loadedRecipes == 0 && discarded.loadedModules == 0, "a journal in format 2, whose mesh records lack the output primitive size, was loaded");
+            std::vector<std::byte> currentJournal;
+            Require(ShaderRecompiler::ReadWholeFile(journalFile, currentJournal), "cannot read the current journal for version rejection");
+            for (const std::uint32_t previousFormat : {14u, 13u, 12u, 10u, 2u}) {
+                std::fstream file(journalFile, std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
+                file.write(reinterpret_cast<const char*>(currentJournal.data()), static_cast<std::streamsize>(currentJournal.size()));
+                file.seekp(4);
+                file.write(reinterpret_cast<const char*>(&previousFormat), sizeof(previousFormat));
+                file.close();
+                Require(file.good(), "the journal header could not be rewritten");
+                auto stale = StartPipelineJournalReplay(context, fingerprint, hooks);
+                Require(stale != nullptr, "the replay of a journal in the previous format did not start");
+                stale->Wait();
+                const auto discarded = PipelineJournalTotals();
+                Require(discarded.loadedRecipes == 0 && discarded.loadedModules == 0, "a journal in previous format " + std::to_string(previousFormat) + " was loaded");
+            }
         }
         ClearCachedPipelines(context.device);
     }
@@ -12993,6 +13043,27 @@ int main(int argc, char** argv) {
                 });
             }
             Require(mock.live == 0, "the sparse heap mirror budget test leaked Vulkan objects");
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--heap-mirror-reference-size") {
+            {
+                mock = MockVulkan{};
+                auto context = mockContext();
+                context.bufferDeviceAddress = true;
+                context.limits.maxStorageBufferRange = 1u << 27;
+                RunHeapMirrorReferenceSizeTests(context, {
+                    [](VkBuffer buffer) -> std::span<std::byte> { return mockBufferMemory(buffer); },
+                    {},
+                    [](VkDeviceAddress address) {
+                        const auto offset = address - 0x100000000000ULL;
+                        const auto buffer = reinterpret_cast<VkBuffer>(offset / 0x10000);
+                        return mockBufferMemory(buffer).subspan(offset % 0x10000);
+                    },
+                    {},
+                    {}
+                });
+            }
+            Require(mock.live == 0, "the heap mirror reference size test leaked Vulkan objects");
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--heap-mirror-run-unwatch") {
@@ -13260,6 +13331,7 @@ int main(int argc, char** argv) {
         pushConstantTests();
         resourceTests();
         oversizedDescriptorTests();
+        viewAtRangeLimitTests();
         guestBufferViewBytesTests();
         descriptorSnapshotTests();
         dispatchMoveTests();
@@ -13327,6 +13399,7 @@ int main(int argc, char** argv) {
         RunGuestAllocationTests();
         RunUnmappedGapTests();
         RunVanishedPageReadTests();
+        RunPageBlockTests();
         RunColorTargetLayoutTests();
         RunLiveStackAccessTests();
         RunTextureFormatTests();

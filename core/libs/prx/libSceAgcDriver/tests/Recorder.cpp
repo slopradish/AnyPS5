@@ -71,6 +71,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <chrono>
 #include <cstdio>
@@ -93,6 +94,10 @@
 #include <vector>
 
 namespace {
+
+struct TestConfigurationError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 using namespace AgcDriver::Graphics;
 using AgcDriver::GuestMemory::GpuMutex;
@@ -522,6 +527,13 @@ public:
                 function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &properties);
                 context.hostImportAlignment = hostProperties.minImportedHostPointerAlignment;
                 context.discreteGpu = properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+                if (const char* forced = std::getenv("ANYPS5_TEST_HOST_IMPORT_ALIGNMENT"); forced != nullptr) {
+                    VkDeviceSize alignment = 0;
+                    const auto [end, error] = std::from_chars(forced, forced + std::strlen(forced), alignment);
+                    if (error != std::errc{} || *end != '\0') throw TestConfigurationError("ANYPS5_TEST_HOST_IMPORT_ALIGNMENT is not a number");
+                    if (alignment != 0 && alignment % hostProperties.minImportedHostPointerAlignment != 0) throw TestConfigurationError("ANYPS5_TEST_HOST_IMPORT_ALIGNMENT is not a multiple of the device's host import alignment");
+                    context.hostImportAlignment = alignment;
+                }
             }
             if (driverProperties.driverID != VK_DRIVER_ID_NVIDIA_PROPRIETARY && hasExtension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) && hasExtension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME)) {
                 extensionsEnabled.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
@@ -857,6 +869,42 @@ void copiedDirectOrderingTests(const Device& device, Recorder& recorder) {
     update(direct, 2);
     recorder.Sync();
     Require(*block == 45, "direct consumers lost GPU-ordered updates");
+    for (const bool reuse : {false, true}) {
+        const auto* imported = HostImportFor(context, address, bytes);
+        Require(imported != nullptr, "the label-ordering input lost its import");
+        const auto commands = recorder.Commands();
+        context.Function<PFN_vkCmdFillBuffer>("vkCmdFillBuffer")(commands, imported->buffer, HostImportOffset(*imported, address), 4, 43);
+        const std::uint32_t value = 43;
+        recorder.NoteLabel(address, std::as_bytes(std::span(&value, 1)), 1001, 0);
+        auto completed = std::make_shared<bool>(false);
+        Require(recorder.AfterRecordedWork([completed] { *completed = true; }), "the unrelated completion was not queued");
+        Require(recorder.PendingLabelIn(address, 4) && !recorder.CompletionLabelIn(address, 4), "the GPU label was classified as a CPU completion store");
+        Require(!CompletePendingCpuWrites(context, address, 4), "an unrelated completion forced a CPU wait for a GPU-ordered label");
+        if (reuse) Require(direct->Revalidate(std::span(&compute, 1)), "a GPU-only label prevented direct consumer reuse");
+        else direct = std::make_shared<ShaderResources>(context, compute);
+        Require(!*completed, "the GPU-only label consumer completed unrelated host work");
+        update(direct, 2);
+        recorder.Sync();
+        Require(*completed && *block == 45, "the GPU label consumer lost its value or completion");
+    }
+    {
+        const std::uint32_t stored = 50;
+        const auto labelBytes = std::as_bytes(std::span(&stored, 1));
+        const auto* import = HostImportFor(context, address, sizeof(stored));
+        Require(import != nullptr, "import the GPU label memory");
+        static_cast<void>(recorder.Commands());
+        recorder.RecordStore(import->buffer, HostImportOffset(*import, address), labelBytes, address);
+        recorder.NoteLabel(address, labelBytes, 2000, 0);
+        Require(recorder.AfterRecordedWork([] {}) && Recorder::PendingCompletionLabels() != 0, "no completion pending beside the GPU label");
+        const auto beforeFresh = recorder.Submissions();
+        auto fresh = std::make_shared<ShaderResources>(context, compute);
+        Require(recorder.Submissions() == beforeFresh, "a fresh direct consumer waited for a label the GPU stores in order");
+        if (recorder.QueuedStoreOverlaps(address, sizeof(stored))) recorder.FlushStores();
+        update(fresh, 2);
+        recorder.Sync();
+        Require(*block == 52, "a direct consumer preceded a label the GPU stored before it");
+        *block = 45;
+    }
     {
         std::array<std::uint32_t, 1024> unregistered{};
         struct Finish {
@@ -1547,6 +1595,26 @@ void afterRecordedWorkTests(const Device& device, Recorder& recorder) {
     recorder.Sync();
     Require(ran == std::vector<int>{1, 2, 3} && Recorder::PendingCompletionLabels() == 0 && recorder.Idle(), "actions behind recorded work did not run once each, in order");
     Require(seen == 1, "an action ran before the completion label recorded ahead of it");
+}
+
+void completionWaitTests(const Device& device, Recorder& recorder) {
+    alignas(64) static std::uint32_t memory[16];
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    recorder.Sync();
+    const std::array<std::byte, 4> gpuValue{std::byte{5}, std::byte{0}, std::byte{0}, std::byte{0}};
+    auto ran = std::make_shared<bool>(false);
+    recorder.NotePendingWrite(base, sizeof(memory));
+    recorder.AfterCompletions(base, gpuValue, 7, 0, true);
+    Require(recorder.AfterRecordedWork([ran] { *ran = true; }) && Recorder::PendingCompletionLabels() != 0, "completion wait: the action behind the open batch is not pending");
+    CompletePendingCpuWrites(device.GetContext(), base, sizeof(memory));
+    Require(!*ran && !recorder.Idle(), "completion wait: a reader of a GPU-stored label waited for a batch whose only completion action writes no memory");
+    recorder.Sync();
+    Require(*ran && recorder.Idle(), "completion wait: the action did not run at the sync");
+    const std::array<std::byte, 4> cpuValue{std::byte{9}, std::byte{0}, std::byte{0}, std::byte{0}};
+    recorder.NotePendingWrite(base, sizeof(memory));
+    recorder.AfterCompletions(base + 4u, cpuValue, 8, 0, false);
+    CompletePendingCpuWrites(device.GetContext(), base, sizeof(memory));
+    Require(memory[1] == 9u && Recorder::PendingCompletionLabels() == 0, "completion wait: a reader of a label stored behind a completion did not wait for that store");
 }
 
 int gpuTimingCompletionTests(const Device& device, bool incomplete) {
@@ -6817,6 +6885,70 @@ void parkedImportUnmapTests(const Device& device) {
     std::cout << "parked import unmap: ok\n";
 }
 
+void windowImportUnmapTests(const Device& device) {
+    const auto& context = device.GetContext();
+    if (context.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: window import unmap not tested\n";
+        return;
+    }
+    const auto alignment = static_cast<std::size_t>(std::max<VkDeviceSize>(65536u, context.hostImportAlignment));
+    const auto window = alignment * 2u;
+    const auto bytes = window * 4u;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(alignment, bytes);
+#endif
+    Require(block != nullptr, "cannot allocate the window import unmap block");
+    const auto release = [&] {
+#ifdef _WIN32
+        VirtualFree(block, 0, MEM_RELEASE);
+#else
+        std::free(block);
+#endif
+    };
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true, true);
+    }
+    SetHostImportRangeWindow(window);
+    const HostImport* imported = nullptr;
+    {
+        std::lock_guard gpu(GpuMutex());
+        imported = HostImportFor(context, address, alignment);
+    }
+    const bool windowed = imported != nullptr && imported->base == address && imported->bytes == window;
+    if (imported == nullptr) {
+        SetHostImportRangeWindow(64ull << 20u);
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+        release();
+        std::cout << "host import refused: window import unmap not tested\n";
+        return;
+    }
+    auto* tail = static_cast<std::byte*>(block) + 2u * window;
+    bool unmapped = false;
+    std::string failure;
+    try {
+        GuestAllocations::Mutation mutation;
+        mutation.Unmap(tail, window, [&](const void*, std::size_t, const void*, bool) { unmapped = true; });
+    } catch (const std::exception& error) {
+        failure = error.what();
+    }
+    SetHostImportRangeWindow(64ull << 20u);
+    ClearHostImports(context.device);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Unmap(block, bytes, [](const void*, std::size_t, const void*, bool) {});
+    }
+    release();
+    Require(windowed, "the access to the first window of a large range did not import that window alone");
+    Require(failure.empty(), "guest unmap of a window another window's import pins: " + failure);
+    Require(unmapped, "guest unmap of a window another window's import pins did not run");
+    std::cout << "window import unmap: ok\n";
+}
+
 void importWatchTests(const Device& device) {
     using namespace AgcDriver::GuestMemory;
     const auto& context = device.GetContext();
@@ -7469,6 +7601,91 @@ void writeBackBlockTests(const Device& device, Recorder& recorder) {
     }
     if (!failures.empty()) throw std::runtime_error("write-back blocks:\n" + failures);
     std::cout << "write-back blocks: ok\n";
+}
+
+bool flushWaitMipChainTests(const Device& device, Recorder& recorder) {
+    const auto& base = device.GetContext();
+    if (base.hostImportAlignment == 0) {
+        std::cout << "skipped, host imports are unavailable: the flush wait over a DCC mip chain not tested\n";
+        return false;
+    }
+    if (65536 % base.hostImportAlignment != 0) {
+        std::cout << "skipped, the host import alignment " << base.hostImportAlignment << " does not divide 64 KiB: the flush wait over a DCC mip chain not tested\n";
+        return false;
+    }
+    const std::string what = "flush wait over a DCC mip chain: ";
+    GuestTextureResource resource{};
+    resource.width = 512;
+    resource.height = 512;
+    resource.mipCount = 3;
+    resource.tileMode = TextureTileMode::kR64KBX;
+    resource.dimension = TextureDimension::k2D;
+    resource.format = 56;
+    resource.dstSelX = 4;
+    resource.dstSelY = 5;
+    resource.dstSelZ = 6;
+    resource.dstSelW = 7;
+    const auto surfaceBytes = static_cast<std::size_t>(DescribeSurface(resource).guestBytes);
+    Require(surfaceBytes > 2 * 65536, what + "the surface does not span several units");
+    const auto keysOffset = (surfaceBytes + 65535) / 65536 * 65536;
+    const auto keyBytes = DccKeyBytes(surfaceBytes);
+    const auto bytes = (keysOffset + keyBytes + 65535) / 65536 * 65536;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(65536, bytes);
+#endif
+    Require(block != nullptr, what + "cannot allocate the block");
+    auto* memory = static_cast<std::uint8_t*>(block);
+    std::memset(memory, 0, keysOffset);
+    std::memset(memory + keysOffset, 0xff, keyBytes);
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true, true);
+    }
+    TextureDetiler detiler(base);
+    auto context = base;
+    context.detiler = &detiler;
+    resource.baseAddress = address;
+    resource.dccAddress = address + keysOffset;
+    const auto writer = address + (surfaceBytes - 1) / 65536 * 65536;
+    bool waited = false;
+    {
+        auto image = StorageTexture::Create(context, detiler, resource, 0);
+        Require(image->UploadedKeys() == DccKeys::Uncompressed, what + "the image did not take its keys as uncompressed");
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, resource.mipCount, 0, 1};
+        const auto commands = recorder.Commands();
+        recorder.Keep(image);
+        const VkClearColorValue value{{1.0f, 0.0f, 0.0f, 1.0f}};
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        context.Function<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(commands, image->Image(), VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        image->MarkDirty();
+        recorder.NotePendingWrite(writer, 16);
+        Require(recorder.OpenWriteOverlaps(writer, 16), what + "the writer is not a write of the open batch");
+        const auto serial = recorder.OpenSerial();
+        Require(StorageTexture::FlushPending(address, 65536, nullptr, "DCC mip chain flush wait test"), what + "the pending image was not flushed");
+        waited = recorder.CompletedThrough() >= serial;
+        StorageTexture::FlushPending(address, surfaceBytes, nullptr, "DCC mip chain flush wait test");
+        recorder.Submit();
+        device.WaitQueue();
+        recorder.Sync();
+    }
+    recorder.Sync();
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+    }
+    ClearHostImports(base.device);
+#ifdef _WIN32
+    VirtualFree(block, 0, MEM_RELEASE);
+#else
+    std::free(block);
+#endif
+    Require(waited, what + "a flush of the first unit did not complete the batch of a writer over another pending unit, which a write-back of a DCC image with more than one mip may store");
+    std::cout << "flush wait over a DCC mip chain: ok\n";
+    return true;
 }
 
 void singlePassTests(const Device& device, Recorder& recorder, bool watched) {
@@ -10626,6 +10843,48 @@ void failedCheckReportTests(const Device& device, Recorder& recorder) {
     Require(false, "a failed check stopped the test with a texture upload in its open batch");
 }
 
+void uploadScratchReuseTests(const Device& device, Recorder& recorder) {
+    const auto& context = device.GetContext();
+    Require(Recorder::Active() == &recorder, "the upload scratch test needs the active recorder");
+    TextureDetiler detiler(context);
+    SampleProgram program(context, recorder);
+    const VkComponentMapping identity{VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+    struct Upload {
+        std::uint32_t size;
+        std::uint8_t value;
+        bool grows;
+    };
+    const std::array<Upload, 5> uploads{{{64, 0x20, false}, {32, 0x90, false}, {64, 0xe0, false}, {128, 0x50, true}, {128, 0xb0, false}}};
+    std::vector<std::vector<std::byte>> snapshots;
+    std::vector<std::unique_ptr<Texture>> textures;
+    recorder.Sync();
+    std::size_t kept = 0;
+    for (std::size_t index = 0; index < uploads.size(); ++index) {
+        GuestTextureResource resource{};
+        resource.baseAddress = 0x100000 + index * 0x100000;
+        resource.width = uploads[index].size;
+        resource.height = uploads[index].size;
+        resource.mipCount = 1;
+        resource.tileMode = TextureTileMode::kLinear;
+        resource.dimension = TextureDimension::k2D;
+        resource.format = 56;
+        resource.dstSelX = 4;
+        resource.dstSelY = 5;
+        resource.dstSelZ = 6;
+        resource.dstSelW = 7;
+        const auto geometry = DescribeSurface(resource);
+        snapshots.emplace_back(static_cast<std::size_t>(geometry.guestBytes), std::byte{uploads[index].value});
+        textures.push_back(std::make_unique<Texture>(context, detiler, resource, identity, snapshots.back()));
+        Require(recorder.Recording(), "a texture upload was not recorded into the open batch");
+        if (uploads[index].grows) Require(recorder.OpenKeptBytes() > kept + geometry.guestBytes, "a texture upload larger than its batch's scratch did not keep a grown scratch");
+        else if (index != 0) Require(recorder.OpenKeptBytes() == kept + geometry.guestBytes, "a texture upload no larger than an earlier one of its batch allocated scratch of its own");
+        kept = recorder.OpenKeptBytes();
+    }
+    for (std::size_t index = 0; index < uploads.size(); ++index) {
+        expectRed(program.Red(textures[index]->View(), textures[index]->Layout(), 0.0f), uploads[index].value / 255.0f, "a texture uploaded through its batch's shared scratch sampled another upload's bytes");
+    }
+}
+
 void singleCubeTests(const Device& device, Recorder& recorder) {
     auto context = device.GetContext();
     TextureDetiler detiler(context);
@@ -12543,6 +12802,8 @@ int main(int argc, char** argv) {
         std::unique_ptr<Device> created;
         try {
             created = std::make_unique<Device>(argc == 2 && (std::string_view(argv[1]) == "--import-watch-other-family-only" || std::string_view(argv[1]) == "--deferred-settle-other-family-only" || std::string_view(argv[1]) == "--host-import-lifetime-other-family-only" || std::string_view(argv[1]) == "--settle-write-order-other-family-only"));
+        } catch (const TestConfigurationError&) {
+            throw;
         } catch (const std::exception& error) {
             if (std::getenv("ANYPS5_REQUIRE_VULKAN") != nullptr) throw;
             std::cout << "skipped, no usable Vulkan device: " << error.what() << '\n';
@@ -12681,6 +12942,11 @@ int main(int argc, char** argv) {
             copiedDirectOrderingTests(device, recorder);
             return 0;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--completion-wait-only") {
+            completionWaitTests(device, recorder);
+            std::cout << "Completion wait tests passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--pending-write-snapshot-only") {
             pendingWriteSnapshotTests(device, recorder);
             return 0;
@@ -12710,6 +12976,11 @@ int main(int argc, char** argv) {
             singleCubeTests(device, recorder);
             cubeExtraSliceTests(device, recorder);
             std::cout << "Single cube snapshot and storage sampling tests passed\n";
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--upload-scratch-only") {
+            uploadScratchReuseTests(device, recorder);
+            std::cout << "Texture upload scratch reuse tests passed\n";
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--sampled-storage-base-level-usage-only") {
@@ -12806,6 +13077,11 @@ int main(int argc, char** argv) {
             parkedImportUnmapTests(device);
             return 0;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--window-import-unmap-only") {
+            gpu.unlock();
+            windowImportUnmapTests(device);
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--idle-publish-wait-only") {
             if (!AgcDriver::Graphics::UnitShadowEnabled() || device.GetContext().hostImportAlignment == 0) {
                 std::cout << "skipped, unit shadows or host imports are unavailable\n";
@@ -12868,6 +13144,7 @@ int main(int argc, char** argv) {
             writeBackBlockTests(device, recorder);
             return 0;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--flush-wait-mip-chain-only") return flushWaitMipChainTests(device, recorder) ? 0 : 77;
         if (argc == 2 && std::string_view(argv[1]) == "--metadata-pass-only") {
             metadataPassTests(device, recorder);
             std::cout << "Color metadata pass tests passed\n";
@@ -13035,6 +13312,7 @@ int main(int argc, char** argv) {
         writeBackPaddingTests(device, recorder, true);
         splitWriteBackTests(device, recorder);
         writeBackBlockTests(device, recorder);
+        flushWaitMipChainTests(device, recorder);
         singlePassTests(device, recorder, false);
         singlePassTests(device, recorder, true);
         unchangedCpuStampTests(device, recorder);
@@ -13047,6 +13325,7 @@ int main(int argc, char** argv) {
         dataRefreshTests(device, recorder);
         imageMemoTests(device, recorder);
         minLodTests(device, recorder);
+        uploadScratchReuseTests(device, recorder);
         firstLayerViewTests(device, recorder);
         sampledStorageBaseLevelUsageTests(device, recorder);
         singleCubeTests(device, recorder);

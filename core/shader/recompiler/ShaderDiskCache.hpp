@@ -1,4 +1,4 @@
-#ifndef CORE_SHADER_RECOMPILER_SHADERDISKCACHE_HPP
+﻿#ifndef CORE_SHADER_RECOMPILER_SHADERDISKCACHE_HPP
 #define CORE_SHADER_RECOMPILER_SHADERDISKCACHE_HPP
 
 #include "CompiledVariant.hpp"
@@ -13,7 +13,7 @@
 
 namespace ShaderRecompiler::ShaderDiskCache {
 
-inline constexpr std::uint32_t FormatVersion = 67;
+inline constexpr std::uint32_t FormatVersion = 68;
 
 enum class LoadStatus {
     Loaded,
