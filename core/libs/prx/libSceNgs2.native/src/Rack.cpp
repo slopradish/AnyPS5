@@ -62,7 +62,7 @@ struct Ps4RackOptionWire {
 };
 static_assert(sizeof(Ps4RackOptionWire) == 128);
 
-static bool Ps4Process() {
+bool Ngs2Ps4Process() {
     try {
         const auto titleId = GetAppTitleId_nid_postfix();
         const std::string_view id(titleId.value, strnlen(titleId.value, sizeof(titleId.value)));
@@ -86,7 +86,7 @@ static std::size_t Ps4RackOptionSize(std::uint32_t rackId) {
 }
 
 static std::size_t WireRackOptionSize(std::uint32_t rackId) {
-    return Ps4Process() ? Ps4RackOptionSize(rackId) : RackOptionSize(rackId);
+    return Ngs2Ps4Process() ? Ps4RackOptionSize(rackId) : RackOptionSize(rackId);
 }
 
 static void ConvertPs4RackOption(const Ps4RackOptionWire* wire, std::size_t wireSize, RackOptions& options) {

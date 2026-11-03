@@ -1,5 +1,6 @@
 #include "Ngs2Test.hpp"
 
+#include "prx/libSceNgs2.native/src/Ngs2Internal.hpp"
 #include "prx/libc/include/General.hpp"
 
 #include <cstdint>
@@ -268,6 +269,35 @@ static void TestParseUser() {
         static_cast<int>(0x804A0408u));
 }
 
+static void TestPs4Layout() {
+    const auto file = PcmFile(2, 44100, 16, 100);
+    Ngs2WaveformInfo info{};
+    Require(sceNgs2ParseWaveformData(file.data(), file.size(), &info) == SCE_NGS2_OK);
+    Require(info.num_blocks == 1);
+
+    std::vector<std::uint8_t> infoBytes(232, 0xaa);
+    Ngs2StoreWaveformInfo(info, infoBytes.data(), true);
+    for (std::size_t at = 200; at < infoBytes.size(); at++) Require(infoBytes[at] == 0xaa);
+    Require(std::memcmp(infoBytes.data(), &info, offsetof(Ngs2WaveformInfo, block)) == 0);
+    const auto* blockBytes = infoBytes.data() + offsetof(Ngs2WaveformInfo, block);
+    std::uint64_t dataOffset = 0;
+    std::uint64_t dataSize = 0;
+    std::uint32_t numSamples = 0;
+    std::memcpy(&dataOffset, blockBytes, sizeof(dataOffset));
+    std::memcpy(&dataSize, blockBytes + 8, sizeof(dataSize));
+    std::memcpy(&numSamples, blockBytes + 0x18, sizeof(numSamples));
+    Require(dataOffset == info.block[0].data_offset);
+    Require(dataSize == info.block[0].data_size);
+    Require(numSamples == info.block[0].num_samples);
+
+    Ngs2WaveformBlock block{};
+    Require(sceNgs2CalcWaveformBlock(&info.format, 0, 10, &block) == SCE_NGS2_OK);
+    std::vector<std::uint8_t> blockBuffer(40, 0xaa);
+    Ngs2StoreWaveformBlock(block, blockBuffer.data(), true);
+    for (std::size_t at = 32; at < blockBuffer.size(); at++) Require(blockBuffer[at] == 0xaa);
+    Require(std::memcmp(blockBuffer.data(), &block, 32) == 0);
+}
+
 int main() {
     TestParsePcm();
     TestParseUser();
@@ -276,5 +306,6 @@ int main() {
     TestParseFileBank();
     TestFrameInfoPcm();
     TestFrameInfoErrors();
+    TestPs4Layout();
     return 0;
 }
