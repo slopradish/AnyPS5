@@ -2053,6 +2053,51 @@ void StorePlan(std::vector<std::byte> key, std::shared_ptr<const IrResourcePlan>
     if (instance.Enabled() && plan != nullptr) instance.StorePlan(std::move(key), std::move(plan));
 }
 
+bool SpecializedStored(std::span<const std::byte> key) {
+    auto& instance = store();
+    if (!instance.Enabled()) return false;
+    std::error_code error;
+    return std::filesystem::is_regular_file(instance.Directory() / EntryName(key), error);
+}
+
+bool LoadSpecialized(std::span<const std::byte> key, StoredSpecialization& module) {
+    auto& instance = store();
+    if (!instance.Enabled()) return false;
+    std::vector<std::byte> file;
+    if (!ReadWholeFile(instance.Directory() / EntryName(key), file)) return false;
+    std::span<const std::byte> payload;
+    if (unwrapEntry(file, key, payload) != LoadStatus::Loaded) return false;
+    Reader reader(payload);
+    std::uint64_t magic = 0;
+    reader.Value(magic);
+    if (magic != 0x53504543u) return false;
+    reader.Value(module.specializationId);
+    reader.Values(module.specialization);
+    reader.Values(module.bindings);
+    reader.Value(module.pushData);
+    reader.Value(module.hashLow);
+    reader.Value(module.hashHigh);
+    reader.Values(module.spirv);
+    return reader.Done();
+}
+
+void StoreSpecialized(std::span<const std::byte> key, const StoredSpecialization& module) {
+    auto& instance = store();
+    if (!instance.Enabled()) return;
+    std::vector<std::byte> payload;
+    Writer writer(payload);
+    writer.Value(static_cast<std::uint64_t>(0x53504543u));
+    writer.Value(module.specializationId);
+    writer.Values(std::span<const std::uint64_t>(module.specialization));
+    writer.Values(std::span<const std::uint32_t>(module.bindings));
+    writer.Value(module.pushData);
+    writer.Value(module.hashLow);
+    writer.Value(module.hashHigh);
+    writer.Values(std::span<const std::uint32_t>(module.spirv));
+    const auto file = wrapEntry(key, payload);
+    static_cast<void>(WriteFileAtomically(instance.Directory() / EntryName(key), file));
+}
+
 std::shared_ptr<const CompiledVariant> Persist(std::span<const std::byte> key, const CompiledVariant& variant) {
     auto& instance = store();
     return instance.Enabled() ? instance.Persist(key, variant) : nullptr;

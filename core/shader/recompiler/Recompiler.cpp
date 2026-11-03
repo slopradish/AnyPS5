@@ -1164,11 +1164,55 @@ SpecializedSpirv specializeModule(const CompiledShaderArtifact& artifact, std::s
         if (now - queued < waitMs) throw SpecializationPending("ShaderRecompiler: the specialized module is still being built in the background; the draw is skipped until it is ready");
     }
     SharedSpirv built;
+    static const bool specializedCache = std::getenv("APS5_NO_SPECIALIZED_CACHE") == nullptr;
+    std::vector<std::byte> diskKey;
+    if (specializedCache && ShaderDiskCache::Enabled()) {
+        const auto append = [&](const void* data, std::size_t bytes) {
+            const auto* first = static_cast<const std::byte*>(data);
+            diskKey.insert(diskKey.end(), first, first + bytes);
+        };
+        append(&artifact.variantId, sizeof(artifact.variantId));
+        const auto content = artifact.spirv.ContentHash();
+        append(&content, sizeof(content));
+        if (!classes.empty()) append(classes.data(), classes.size() * sizeof(std::uint32_t));
+        for (const auto& constant : constants) {
+            append(&constant.id, sizeof(constant.id));
+            append(&constant.value, sizeof(constant.value));
+        }
+        append(target.featureDigest.data(), target.featureDigest.size() * sizeof(std::uint64_t));
+        append(&target.nonConstantImageOffsets, sizeof(target.nonConstantImageOffsets));
+        append(&target.srgbDecodeFormats, sizeof(target.srgbDecodeFormats));
+        ShaderDiskCache::StoredSpecialization stored;
+        if (ShaderDiskCache::LoadSpecialized(diskKey, stored)) {
+            auto module = std::make_shared<SpecializedModule>();
+            module->specializationId = stored.specializationId;
+            module->specialization.reserve(stored.specialization.size());
+            for (const auto packed : stored.specialization) module->specialization.push_back({static_cast<std::uint32_t>(packed >> 32u), static_cast<std::uint32_t>(packed)});
+            module->bindings = std::move(stored.bindings);
+            module->pushData = stored.pushData;
+            module->hash = SpirvContentHash{stored.hashLow, stored.hashHigh};
+            auto spirv = InternSpirv(std::move(stored.spirv));
+            module->spirv = spirv.Weaken();
+            return {module, spirv};
+        }
+    }
     std::call_once(entry->ready, [&] {
         try {
             auto specialized = buildSpecializedModule(artifact, classes, constants, target);
             entry->module = std::move(specialized.module);
             built = std::move(specialized.spirv);
+            if (specializedCache && ShaderDiskCache::Enabled() && entry->module != nullptr && !built.empty()) {
+                ShaderDiskCache::StoredSpecialization stored;
+                stored.specializationId = entry->module->specializationId;
+                stored.specialization.reserve(entry->module->specialization.size());
+                for (const auto& constant : entry->module->specialization) stored.specialization.push_back((static_cast<std::uint64_t>(constant.id) << 32u) | constant.value);
+                stored.bindings = entry->module->bindings;
+                stored.pushData = entry->module->pushData;
+                stored.hashLow = entry->module->hash.low;
+                stored.hashHigh = entry->module->hash.high;
+                stored.spirv = built.Copy();
+                ShaderDiskCache::StoreSpecialized(diskKey, stored);
+            }
         } catch (...) {
             entry->failure = std::current_exception();
         }
