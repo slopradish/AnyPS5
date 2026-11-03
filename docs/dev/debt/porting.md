@@ -49,6 +49,12 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | 18 | NGS2 PS4 rack layout | local (refactored) | done |
 | 19 | PS4 audio buzz | none yet | closed as not an AudioOut defect: the host device spec matches the guest exactly (48 kHz, 8ch S16, `ab698b02e8`), the shadPS4 PS4-accurate 5.1/7.1 -> stereo downmix is in (`7d5f691be9`), and `APS5_DUMP_AUDIO_OUT` (`bc2ea9de51`) shows the title never writes the port's buffers at all |
 
+## Relinker
+
+| # | Fix | Source | Status |
+|---|-----|--------|--------|
+| 20 | Deferred modules start what they need: dependency start on load, the best-effort sweep at the first deferred load, wait-safety, and the stored-start-result reset (Windows) | dean `62aec71ad8` .. `778c69a47f`, ported as `11c7f1339a` .. `7cbf917678` | ported, `guest_deferred_module_{sweep,sweep_failed,dependency,dependency-nested,reload,pinned,parallel,reentrant}` |
+
 ## Recovered modules and cross-fork improvements
 
 | Module | Source | Status |
@@ -114,7 +120,8 @@ branch dropped. The report above makes each loss visible; the commands below fin
     {"id": "ps4-gnm-writers", "source": "4eda89a099", "status": "done", "paths": ["core/libs/prx/libSceGnmDriver/Export.cpp"], "note": "PS4 GNM writers"},
     {"id": "index-type-decode", "source": "77fbd10ac7", "status": "done", "paths": ["core/libs/prx/libSceAgcDriver/Execution/src/Pm4.cpp"], "note": "INDEX_TYPE decode fix"},
     {"id": "ngs2-ps4-rack", "source": null, "status": "done", "paths": ["core/libs/prx/libSceNgs2.native"], "note": "NGS2 PS4 rack layout"},
-    {"id": "ps4-audio-buzz", "source": null, "status": "done", "paths": ["core/libs/prx/libSceAudioOut/src/AudioOut.cpp"], "note": "PS4 audio buzz: the title opens the MAIN port as 256 frames at 48 kHz S16_8Ch, feeds it from a three-slot ring of 4144-byte slots, and never writes any of the 4096 buffer bytes after its first three calls: poisoning each submitted buffer with 0x5A leaves every later call 0x5A, so it resubmits the same stale memory 168 times a second. The 187.5 Hz buzz is the eight bytes of allocator metadata (a guest pointer) that land in that buffer's last frame, downmixed to (3508, 29). sceNgs2SystemRender is never called, no AUDIO3D port is opened, the host device is a 2-channel fallback of the requested 8 channels, and the frame at the same point is a garbled boot screen, so the title's own mixer has not started. Nothing to change in AudioOut"}
+    {"id": "ps4-audio-buzz", "source": null, "status": "done", "paths": ["core/libs/prx/libSceAudioOut/src/AudioOut.cpp"], "note": "PS4 audio buzz: the title opens the MAIN port as 256 frames at 48 kHz S16_8Ch, feeds it from a three-slot ring of 4144-byte slots, and never writes any of the 4096 buffer bytes after its first three calls: poisoning each submitted buffer with 0x5A leaves every later call 0x5A, so it resubmits the same stale memory 168 times a second. The 187.5 Hz buzz is the eight bytes of allocator metadata (a guest pointer) that land in that buffer's last frame, downmixed to (3508, 29). sceNgs2SystemRender is never called, no AUDIO3D port is opened, the host device is a 2-channel fallback of the requested 8 channels, and the frame at the same point is a garbled boot screen, so the title's own mixer has not started. Nothing to change in AudioOut"},
+    {"id": "deferred-dependency-start", "source": null, "status": "ported", "paths": ["core/libs/prx/libkernel/Module/src/DynamicLoader.cpp", "core/relinker/relinker/src/guest/GuestModuleBuilder.cpp"], "marker": "sweepMagic", "note": "Windows deferred modules start what they need: a deferred module's dependencies start before its module_start with the current load's arguments, the first deferred load sweeps every deferred module another module depends on (best effort, a failing one is logged and skipped), and a dependency's start result is dropped when the outermost deferred load ends. dean `62aec71ad8`..`778c69a47f`, ported as `11c7f1339a`..`7cbf917678`"}
   ]
 }
 ```

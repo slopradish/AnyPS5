@@ -97,6 +97,7 @@ cmd /c '.\app.exe > run.log 2>&1'
 
 - **PlayGo:** dumps without PlayGo metadata stop at start unless `APS5_PLAYGO_UNLISTED_CHUNKS` is set (installed, absent, or a comma-separated list of installed chunk ids); report the value used.
 - **UE4 titles:** keep the startup movies in place. Renaming them to skip the intro has made a level render without its 3D view, which looked like an emulator bug and wasn't.
+- **LEGO Harry Potter Collection (PS4, CUSA05935):** if the audio is a buzz and `APS5_DUMP_AUDIO_OUT` shows a periodic impulse rather than silence, the title is submitting a buffer it never wrote — it opens the main port as 256 frames 8ch S16 and feeds it from a three-slot ring it does not fill. Do not chase `AudioOut` or the downmix; check the title's own mixer first (`.tasks/T-84.md`).
 
 ## Input
 
