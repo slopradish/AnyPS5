@@ -2,11 +2,14 @@
 #include "StencilReplay.hpp"
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <cstring>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <deque>
+#include <thread>
 #include "CacheKey.hpp"
 #include "CompiledVariant.hpp"
 #include "VertexInputSpecialization.hpp"
@@ -61,6 +64,53 @@
 namespace ShaderRecompiler {
 
 namespace {
+
+thread_local bool deferringSpecialization = false;
+
+struct SpecializationPoolState {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<std::function<void()>> jobs;
+};
+
+SpecializationPoolState& SpecializationPool() {
+    static SpecializationPoolState* state = [] {
+        auto* created = new SpecializationPoolState();
+        static const int threads = [] {
+            const char* text = std::getenv("APS5_SPECIALIZATION_THREADS");
+            const int parsed = text != nullptr ? std::atoi(text) : 4;
+            return parsed > 0 ? parsed : 4;
+        }();
+        for (int index = 0; index < threads; ++index) {
+            std::thread([created] {
+                for (;;) {
+                    std::function<void()> job;
+                    {
+                        std::unique_lock lock(created->mutex);
+                        created->wake.wait(lock, [created] { return !created->jobs.empty(); });
+                        job = std::move(created->jobs.front());
+                        created->jobs.pop_front();
+                    }
+                    try {
+                        job();
+                    } catch (...) {
+                    }
+                }
+            }).detach();
+        }
+        return created;
+    }();
+    return *state;
+}
+
+void SubmitSpecialization(std::function<void()> job) {
+    auto& pool = SpecializationPool();
+    {
+        std::lock_guard lock(pool.mutex);
+        pool.jobs.push_back(std::move(job));
+    }
+    pool.wake.notify_one();
+}
 
 ShaderStageKind toShaderStageKind(ShaderStage stage) {
     switch (stage) {
@@ -948,6 +998,9 @@ struct SpecializedModuleEntry {
     std::once_flag ready;
     std::exception_ptr failure;
     std::shared_ptr<const SpecializedModule> module;
+    std::atomic<bool> started{false};
+    std::atomic<bool> done{false};
+    std::atomic<std::int64_t> queuedAt{0};
 };
 
 struct PreparedModuleEntry {
@@ -1083,6 +1136,32 @@ SpecializedSpirv specializeModule(const CompiledShaderArtifact& artifact, std::s
         std::unique_lock lock(mutex);
         const auto found = modules.find(key);
         entry = found != modules.end() ? found->second : modules.emplace(key, std::make_shared<SpecializedModuleEntry>()).first->second;
+    }
+    static const bool deferSpecialization = std::getenv("APS5_DEFER_SPECIALIZATION") != nullptr;
+    if (deferSpecialization && deferringSpecialization && !entry->done.load(std::memory_order_acquire)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!entry->started.exchange(true, std::memory_order_acq_rel)) {
+            entry->queuedAt.store(now.time_since_epoch().count(), std::memory_order_release);
+            auto queuedArtifact = artifact;
+            std::vector<std::uint32_t> queuedClasses(classes.begin(), classes.end());
+            std::vector<PipelineSpecializationConstant> queuedConstants(constants.begin(), constants.end());
+            auto queuedTarget = target;
+            SubmitSpecialization([entry, queuedArtifact = std::move(queuedArtifact), queuedClasses = std::move(queuedClasses), queuedConstants = std::move(queuedConstants), queuedTarget]() mutable {
+                try {
+                    static_cast<void>(specializeModule(queuedArtifact, queuedClasses, queuedConstants, queuedTarget));
+                } catch (...) {
+                    entry->failure = std::current_exception();
+                }
+                entry->done.store(true, std::memory_order_release);
+            });
+        }
+        static const auto waitMs = std::chrono::milliseconds([] {
+            const char* text = std::getenv("APS5_SPECIALIZATION_WAIT_MS");
+            const int parsed = text != nullptr ? std::atoi(text) : 300;
+            return parsed >= 0 ? parsed : 300;
+        }());
+        const auto queued = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(entry->queuedAt.load(std::memory_order_acquire)));
+        if (now - queued < waitMs) throw SpecializationPending("ShaderRecompiler: the specialized module is still being built in the background; the draw is skipped until it is ready");
     }
     SharedSpirv built;
     std::call_once(entry->ready, [&] {
@@ -2228,6 +2307,18 @@ void SetResultMemoTrimHook(std::function<void()> hook) {
 
 std::uint64_t ResultMemoBytes() {
     return resultMemoCounters().heldBytes.load(std::memory_order_relaxed);
+}
+
+DeferSpecializationScope::DeferSpecializationScope() {
+    deferringSpecialization = true;
+}
+
+DeferSpecializationScope::~DeferSpecializationScope() {
+    deferringSpecialization = false;
+}
+
+bool DeferringSpecialization() {
+    return deferringSpecialization;
 }
 
 }

@@ -21,6 +21,20 @@
 
 namespace ShaderRecompiler {
 
+struct SpecializationPending : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+class DeferSpecializationScope {
+public:
+    DeferSpecializationScope();
+    ~DeferSpecializationScope();
+    DeferSpecializationScope(const DeferSpecializationScope&) = delete;
+    DeferSpecializationScope& operator=(const DeferSpecializationScope&) = delete;
+};
+
+[[nodiscard]] bool DeferringSpecialization();
+
 enum class ShaderStage {
     Compute,
     Vertex,

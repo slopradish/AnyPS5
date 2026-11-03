@@ -157,7 +157,10 @@ std::shared_ptr<const ShaderRecompiler::RecompileResult> Driver::materializeDraw
 
     timing.Mark("capture_resources");
     try {
-        stageCapture.compiled = invocation.Materialize(*capture);
+        stageCapture.compiled = [&] {
+        const ShaderRecompiler::DeferSpecializationScope defer;
+        return invocation.Materialize(*capture);
+    }();
         stageCapture.capture = capture;
     } catch (const std::exception& error) {
         TraceMaterializationFailure(traceToken, submission, packetOffset, i, "capture-or-materialize", std::current_exception());
