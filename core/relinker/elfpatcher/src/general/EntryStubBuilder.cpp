@@ -18,6 +18,9 @@ std::vector<std::uint8_t> EntryStubBuilder::BuildEntryStub(
     const std::uint64_t realEntryVaddr,
     const std::optional<std::uint64_t> mainStackEntrySlotVaddr
 ) const {
+    // The kernel enters with rsp at argc (a qword whose high half is zero), followed by the argv
+    // pointers and a null. That is already the guest's entry parameter block ({int argc; pad;
+    // const char* argv[]}), so hand the guest a pointer to it rather than building a copy.
     std::vector<std::uint8_t> s;
     const auto appendRel32 = [&](const std::uint64_t target) {
         const std::uint64_t nextVaddr = stubVaddr + s.size() + sizeof(std::int32_t);

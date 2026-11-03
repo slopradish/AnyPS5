@@ -280,6 +280,7 @@ struct IrResourcePlan {
     bool denseValueIds = false;
     CompactResourcePlan compact;
     bool requiresSpecializationMemory = false;
+    bool allocationRequests = false;
     bool srtPlanComplete = false;
     bool resourceTrackingComplete = false;
     ShaderInfo info;

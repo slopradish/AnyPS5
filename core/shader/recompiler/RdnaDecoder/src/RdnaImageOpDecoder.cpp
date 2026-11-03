@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace ShaderRecompiler {
 

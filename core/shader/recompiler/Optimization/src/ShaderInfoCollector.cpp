@@ -293,6 +293,7 @@ void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pi
             if (inst->Opcode() == IrOpcode::GetAttribute) {
                 const auto input = inst->Argument(0)->Resolve()->ImmediateU32();
                 if (IsPixelParameterCustom(*pixel, input)) {
+                    // P0 + i*P10 + j*P20 of vertices passed through unchanged is no interpolation.
                     throw std::runtime_error("pixel input " + std::to_string(input) + " passes its vertices through unchanged but is read with v_interp_p1/p2");
                 }
                 read[input] = true;

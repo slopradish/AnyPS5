@@ -86,6 +86,14 @@ bool DebugProbeActive() {
     return g_debugProbeActive.load();
 }
 
+bool GpuSelectedDescriptors() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("APS5_RUNTIME_DESCRIPTORS");
+        return value == nullptr || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 bool RayTracingStrict() {
     static const bool strict = [] {
         const char* text = std::getenv("APS5_RAYTRACING");
