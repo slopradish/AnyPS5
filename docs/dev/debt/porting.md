@@ -1,4 +1,4 @@
-# Porting tracker - fixes lost during upstream syncs
+﻿# Porting tracker - fixes lost during upstream syncs
 
 Every entry below is a fix present in a fork or in a pre-sync branch but not necessarily in
 `wolverine-bringup`. The fenced `port-manifest` block is the machine-readable form: `python3
@@ -63,7 +63,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | Texture budget follows the live budget | Kyty `0e99357e4d` | already: `SampledTextureBudget` recomputes from `reported` on every call |
 | SrtWalker control-flow read-ahead rule | TheCruZ `440adec5eb` | already partially: `SrtFlatSlotClasses` excludes control-flow-only slots from the pure set; verify against Astro Bot |
 | PassHazards draw grouping | TheCruZ `629f98d04e` | already: upstream's `PassHazards` tracks writes and keeps draws in the pass |
-| Empty fragment shader for pixel-less pipelines | Kyty `5a7fa9a1b3` | pending: check the null-pixel-program path |
+| Empty fragment shader for pixel-less pipelines | Kyty `5a7fa9a1b3` | already: `NullPixelProgramAddress`/`PrepareNullPixelProgram` give a pixel-less draw a real fragment stage |
 | GPU-interrupt coalescing | TheCruZ `7e70f8af8e` | pending: audit the label/event queue for per-event growth |
 | Bindless-table element checks by version | TheCruZ `b9cb34ae55`, `c5b92805c8` | pending: resource cache already has per-key churn accounting; wire version counters if the profile shows it |
 | Reads around GPU writes take the command-processor bytes | TheCruZ `12d76a35d3` | pending: audit `WriteEvidence` |
@@ -73,7 +73,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | Colour attachments bound by write mask | BryKyty `26d62f802e` | pending: audit `Pipeline`'s attachment/format selection |
 | `KYTY_WRITE_GUARD` | Kyty `72a85b1e8d` | pending: this tree's `WriteEvidence`/pending-write path is the analogue |
 | FSR swapchain teardown order | Kyty `5b48933306` | not applicable: no FSR path in this tree |
-| Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | pending: rewrite against upstream's `State` (`DepthTarget` now has `VkFormat`/HTILE/slices, no `DepthState`) |
+| Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | superseded: upstream `DepthSurface`/`DepthSurface.cpp` already keeps depth GPU-resident (HTILE, slices, sampling, guards) |
 | StorageAlias wiring | legacy `4d29e7e9fb` | pending: call `AliasBlockCopies` from `writeBackLayers` |
 | DrawAhead/PreparedDraw | legacy `f4...`/`0c...` | blocked: needs legacy `Pm4::StateEffect`/`ApplyRegisterPairs` and `Driver` pipeline declarations |
 | SpirvWaveExchange/NggPassthrough | legacy | blocked: needs legacy `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers` in the translator |
