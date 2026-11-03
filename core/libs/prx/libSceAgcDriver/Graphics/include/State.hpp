@@ -3,16 +3,26 @@
 
 #include "prx/libSceAgcDriver/Graphics/include/Context.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ColorTargetLayout.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestTextureResource.hpp"
 #include "prx/libSceAgcDriver/Execution/include/QueueState.hpp"
 #include <vector>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include "Recompiler.hpp"
 
 namespace AgcDriver::Graphics {
+
+class Buffer;
+
+struct TessellationCapture {
+    std::shared_ptr<Buffer> header;
+    std::shared_ptr<Buffer> items;
+};
 
 enum class ShaderPath {
     Vertex,
@@ -28,7 +38,14 @@ struct ShaderStages {
     std::uint32_t fragmentWaveSize;
     std::optional<ShaderRecompiler::MeshConfiguration> mesh;
     std::optional<ShaderRecompiler::TessellationConfiguration> tessellation;
+    float minTessellationLevel = 1.0f;
+    float maxTessellationLevel = 64.0f;
+    std::uint32_t hullWaveSize = 64;
+    std::optional<ShaderRecompiler::MeshConfiguration> tessellationGeometry;
+    bool legacyVertex = false;
 };
+
+inline constexpr std::uint16_t UnclampedBlendMask = 0xffffu;
 
 struct ColorTarget {
     std::uint64_t address;
@@ -38,131 +55,220 @@ struct ColorTarget {
     std::uint8_t componentMapping;
     ColorTileMode tileMode = ColorTileMode::Linear;
     std::uint32_t elementBytes = 4;
+    ShaderRecompiler::ColorExportPacking packing = ShaderRecompiler::ColorExportPacking::None;
     // DCC metadata of a compressed target (CB_COLOR_INFO DCC_ENABLE), or 0 (see DccMetadata.hpp).
     std::uint64_t dccAddress = 0;
+    std::uint64_t chainDccAddress = 0;
     bool dccAlphaOnMsb = false;
-    // CB_COLOR_CLEAR_WORD0/1: the texel (in memory order, 64 bits at most) the DCC register clear code
-    // (DccKeys::ClearRegister) stands for.
-    std::array<std::uint32_t, 2> clearWords{};
+    bool dccPipeAligned = false;
+    std::uint64_t cmaskAddress = 0;
+    std::size_t cmaskBytes = 0;
+    bool cmaskFastClear = false;
     std::uint64_t surfaceAddress = 0;
     VkExtent2D surfaceExtent{};
     std::uint32_t mipCount = 1;
     std::uint32_t mip = 0;
     bool mipTail = false;
+    std::array<std::uint32_t, 2> clearWords{};
     std::uint32_t slot = 0;
-    std::uint32_t exportIndex = 0;
     std::uint32_t depth = 1;
     std::uint32_t depthSlice = 0;
-    std::uint64_t cmaskAddress = 0;
+    std::uint64_t arrayAddress = 0;
+    std::uint32_t arrayLastSlice = 0;
+    std::uint32_t arraySlice = 0;
+    std::uint32_t layers = 1;
+    std::uint32_t exportIndex = 0;
+    bool uintExport = false;
+    bool volume = false;
+    std::uint32_t pipeBankXor = 0;
+    std::uint32_t samples = 1;
+    std::uint32_t coverageSamples = 1;
+    std::uint32_t dccControl = 0;
+    std::uint64_t fmaskAddress = 0;
+    std::uint32_t fmaskPipeBankXor = 0;
+    std::uint16_t partialWriteMask = 0;
+
+    std::uint64_t MemoryAddress() const {
+        return volume && tileMode != ColorTileMode::Linear ? surfaceAddress : address;
+    }
 };
 
-// The depth/stencil surface a draw tests against (DB_Z_INFO, DB_STENCIL_INFO, the DB_*_BASE words,
-// DB_DEPTH_SIZE_XY). Its contents live in a GPU-resident image (DepthTarget.hpp) keyed by these
-// fields; the guest memory behind the surface is neither read nor written (see DepthTarget.hpp).
 struct DepthTarget {
-    // DB_Z_READ_BASE (the same as DB_Z_WRITE_BASE), or the stencil base of a stencil-only surface.
-    std::uint64_t address = 0;
-    std::uint64_t stencilAddress = 0;
-    // DB_HTILE_DATA_BASE when DB_Z_INFO.TILE_SURFACE_ENABLE is set (HTILE fills mean clears), else 0.
+    std::uint64_t address;
+    std::uint64_t stencilAddress;
+    VkExtent2D extent;
+    VkFormat format;
+    float clearDepth;
+    std::uint8_t clearStencil;
     std::uint64_t htileAddress = 0;
-    VkExtent2D extent{};
-    // DB_Z_INFO.FORMAT (0 none, 1 Z_16, 3 Z_32_FLOAT) and whether DB_STENCIL_INFO.FORMAT is STENCIL_8.
-    std::uint32_t zFormat = 0;
-    bool stencil = false;
-    // DB_Z_INFO.SW_MODE, for the record (the surface is never detiled).
-    std::uint32_t tileMode = 0;
-    // DB_DEPTH_VIEW.SLICE_START of a single-layer view into an array surface.
-    std::uint32_t slice = 0;
-};
-
-// The depth/stencil state of a draw that renders with a depth attachment (`attached`), decoded from
-// DB_DEPTH_CONTROL, DB_STENCIL_CONTROL, DB_STENCILREFMASK(_BF), DB_DEPTH_VIEW and DB_RENDER_CONTROL.
-// A depth or stencil clear draw (DB_RENDER_CONTROL.DEPTH_CLEAR_ENABLE / STENCIL_CLEAR_ENABLE, the
-// fast clear the DB does through HTILE) is rendered as an always-passing test that writes the clear
-// values: DecodeState pins the viewport depth range to DB_DEPTH_CLEAR and replaces the stencil
-// operations with REPLACE of DB_STENCIL_CLEAR. The clear values are decoded for every attached draw:
-// a pending clear of the resident image (a new image, an HTILE fill) is resolved with them.
-struct DepthState {
-    bool attached = false;
-    bool depthTest = false;
-    bool depthWrite = false;
-    VkCompareOp depthCompare = VK_COMPARE_OP_ALWAYS;
-    bool stencilTest = false;
-    VkStencilOpState front{};
-    VkStencilOpState back{};
-    bool clearDepth = false;
-    bool clearStencil = false;
-    float depthClearValue = 0;
-    std::uint32_t stencilClearValue = 0;
-    // PA_SU_SC_MODE_CNTL.POLY_OFFSET_*_ENABLE with PA_SU_POLY_OFFSET_*, in Vulkan's units.
-    bool depthBias = false;
-    float depthBiasConstant = 0;
-    float depthBiasSlope = 0;
-    float depthBiasClamp = 0;
-    bool depthBounds = false;
-    float depthBoundsMin = 0;
-    float depthBoundsMax = 1;
+    bool htileStencil = false;
+    std::uint32_t samples = 1;
+    std::uint32_t depthSwizzle = 0;
+    std::uint32_t pipeBankXor = 0;
+    std::uint32_t firstSlice = 0;
+    std::uint32_t lastSlice = 0;
+    bool iterate256 = false;
+    bool htilePipeAligned = false;
+    std::uint32_t htileVrsEncoding = 0;
+    bool htileDepthOnly = false;
 };
 
 struct State {
     ShaderStages stages;
-    // The first written MRT slot; `blends` holds one state per color export, attachment i being
-    // export MRTi (exports go to the slots CB_SHADER_MASK enables, in order: ColorTarget::slot), and
-    // `colors` the written slots with their export indices (an unwritten one is VK_ATTACHMENT_UNUSED).
+    std::optional<DepthTarget> depth;
+    bool depthTest = false;
+    bool depthWrite = false;
+    bool depthCopySource = false;
+    VkCompareOp depthCompare = VK_COMPARE_OP_ALWAYS;
+    bool depthBoundsTest = false;
+    float minDepthBounds = 0.0f;
+    float maxDepthBounds = 1.0f;
+    bool depthBias = false;
+    float depthBiasConstant = 0.0f;
+    float depthBiasSlope = 0.0f;
+    float depthBiasClamp = 0.0f;
+    bool depthBiasPerFace = false;
+    float backDepthBiasConstant = 0.0f;
+    float backDepthBiasSlope = 0.0f;
+    bool stencilTest = false;
+    VkStencilOpState stencilFront{};
+    VkStencilOpState stencilBack{};
+    std::optional<std::uint32_t> stencilReplayReference;
     ColorTarget color;
     std::vector<ColorTarget> colors;
     std::vector<VkPipelineColorBlendAttachmentState> blends;
     bool hasColorTarget;
     bool rectList = false;
+    bool quadList = false;
+    bool rasterizerDiscard = false;
+    std::shared_ptr<const TessellationCapture> tessellationCapture;
+    bool dualSourceBlend = false;
+    std::uint32_t reversedBlend = 0;
     VkExtent2D renderExtent;
+    std::uint32_t renderLayers = 1;
+    std::uint32_t meshLayerBase = 0;
+    std::uint32_t meshLayerCount = 0xffffffffu;
+    std::uint32_t layerExports = 0;
     VkPrimitiveTopology topology;
     bool primitiveRestart = false;
     VkViewport viewport;
     bool negativeOneToOne;
     bool depthClamp = false;
+    float depthScale = 1;
+    float depthOffset = 0;
+    float depthClampMin = 0;
+    float depthClampMax = 1;
+    struct DepthRemap {
+        std::uint32_t mode = 0;
+        float scale = 1;
+        float offset = 0;
+        bool operator==(const DepthRemap&) const = default;
+    } depthRemap;
+    bool alphaToCoverage = false;
+    bool ditheredAlphaToCoverage = false;
+    std::uint8_t ditheredAlphaSamples = 8;
+    bool perSampleShading = false;
+    bool mergedCoverage = false;
+    bool truncatedCoverage = false;
+    VkConservativeRasterizationModeEXT conservativeRasterization = VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
     VkRect2D scissor;
     VkCullModeFlags cullMode;
+    VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
     VkFrontFace frontFace;
+    VkProvokingVertexModeEXT provokingVertexMode = VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
     VkPipelineColorBlendAttachmentState blend;
     std::array<float, 4> blendConstants;
-    // Meaningful only with `depth.attached`.
-    DepthTarget depthTarget;
-    DepthState depth;
+    std::uint8_t colorRop = 0xccu;
+    std::uint32_t samples = 1;
+    std::array<std::uint8_t, 32> sampleLocations{};
+    bool customSampleLocations = false;
+    bool sampleLocationGrid = false;
+    std::uint32_t paClVsOutCntl = 0;
+    bool vertexPoints = false;
+    float pointSize = 1.0f;
+    float pointSizeMin = 0.0f;
+    float pointSizeMax = 0.0f;
+    std::array<std::uint16_t, 4> quadSampleMask{0xffffu, 0xffffu, 0xffffu, 0xffffu};
+    bool pixelEarlyZ = false;
+    bool pixelKill = false;
 };
 
-ShaderStages DecodeShaderStages(const QueueState& queue, bool passthroughPerVertex = false);
-State DecodeState(const QueueState& queue, bool passthroughPerVertex = false);
-// One color buffer (CB_COLOR<slot>_*): its surface, format, extent of the viewed mip and DCC metadata.
-ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
+// PA_CL_VS_OUT_CNTL bits that place position exports (clip and cull distances, the misc and the two
+// distance vectors); a vertex program that exports pos1..pos3 depends on them.
+inline constexpr std::uint32_t PositionExportLayoutBits = 0xffffu | (1u << 21u) | (1u << 22u) | (1u << 23u);
 
-// A draw in one of the CB's metadata modes (CB_COLOR_CONTROL.MODE): ELIMINATE_FAST_CLEAR writes the
-// fast-clear color into the fast-cleared pixels it covers, DCC_DECOMPRESS stores the pixels it covers
-// uncompressed; either way the shader's output is not what lands, and afterwards the covered pixels'
-// texels read as the metadata said they did. Targets are the enabled color buffers with a format.
+inline constexpr std::uint8_t CopyRop = 0xccu;
+VkLogicOp LogicOpFromRop(std::uint8_t rop);
+
+ShaderStages DecodeShaderStages(const QueueState& queue, bool vertexWorkgroup = false);
+void ApplyPointSize(const State& state, ShaderRecompiler::ShaderVertexStageInfo& vertex);
+State DecodeState(const QueueState& queue, bool vertexWorkgroup = false);
+void ApplyDepthRemap(const Context& context, State& state);
+void ApplyDepthBoundsEmulation(const Context& context, State& state, const ShaderRecompiler::ShaderPixelStageInfo& pixel);
+void NormalizeUnusedViewportDepth(State& state, const ShaderRecompiler::ShaderPixelStageInfo& pixel);
+std::uint32_t StageWaveSize(const ShaderStages& stages, ShaderRecompiler::ShaderStage stage);
+std::optional<ShaderRecompiler::MeshConfiguration> StageMeshConfiguration(const ShaderStages& stages, ShaderRecompiler::ShaderStage stage);
+std::uint32_t StagePushLimit(const ShaderStages& stages, std::uint32_t pushOffset, bool depthRemap);
+std::array<VkSampleLocationEXT, 32> SampleLocations(const State& state);
+std::array<std::uint8_t, 32> PixelSampleLocations(const State& state, const ShaderRecompiler::ShaderPixelStageInfo& pixel);
+VkExtent2D SampleLocationGrid(const State& state);
+using SampleOrder = std::array<std::uint32_t, 4>;
+inline constexpr std::uint32_t KeptSampleOrder = 0x76543210u;
+std::optional<SampleOrder> SameSetSampleOrder(const State& state);
+bool ReordersSamples(const SampleOrder& order);
+std::uint32_t InvertSampleOrder(std::uint32_t order);
+std::uint32_t HostSampleBits(std::uint32_t guestBits, std::uint32_t order);
+bool SampleMaskFollowsOrder(const State& state, const SampleOrder& order);
+std::array<std::uint16_t, 4> QuadSampleMasks(const State& state, const SampleOrder& order);
+std::array<std::uint8_t, 8> ExportMappings(const State& state);
+std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& state);
+std::uint16_t PackedWriteMask(std::uint8_t componentMapping, std::uint32_t exportedMask);
+GuestTextureResource TargetMergeSurface(const ColorTarget& color);
+bool DepthStencilWrites(const State& state);
+bool DepthStencilTests(const State& state);
+std::vector<ShaderRecompiler::TargetMerge> ExportTargetMerges(const State& state);
+ShaderRecompiler::RasterPrimitive RasterPrimitiveOf(const State& state);
+bool PartialSampleMask(const State& state);
+bool UniformSampleMask(const State& state);
+VkSampleMask HostSampleMask(const State& state);
+std::uint8_t QuadPixelMask(const State& state);
+std::array<std::uint16_t, 4> QuadSampleMasks(const State& state);
+ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot, bool allowMultisampleDcc = false);
+struct ReversedBlend {
+    VkPipelineColorBlendAttachmentState blend;
+    std::uint32_t shaderCode;
+};
+ReversedBlend TranslateReversedBlend(std::uint32_t blendControl, std::uint8_t componentMapping, VkFormat format, bool forceDestinationAlphaOne);
+std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height);
+std::uint32_t ColorWriteMask(const Registers& context);
+GuestTextureResource SurfaceForTarget(const ColorTarget& color);
+
 struct ColorMetadataPass {
-    enum class Mode { EliminateFastClear, DccDecompress };
+    enum class Mode { EliminateFastClear, DccDecompress, Resolve, FmaskDecompress };
     Mode mode;
     std::vector<ColorTarget> targets;
+    std::optional<ColorTarget> source;
 };
-// The metadata pass a draw's registers describe, or nothing for a draw in another CB mode. Throws
-// when the pass does more than the metadata operation over whole targets (depth or stencil work,
-// multisampling, a nonstandard ROP, a viewport or scissor short of a target).
 std::optional<ColorMetadataPass> DecodeColorMetadataPass(const QueueState& queue);
-// A DB metadata blit: DB_RENDER_CONTROL names HTILE operations only (DEPTH/STENCIL_COMPRESS_DISABLE,
-// an in-place expansion of the surface; RESUMMARIZE_ENABLE, HTILE recomputed from it), the depth and
-// stencil tests, writes and bounds are off, nothing reaches a color target (CB mode disable, or no
-// enabled channel the shader exports), and the pixel shader is one the hardware does not run (no
-// color, depth, stencil or mask export, no kill, no alpha-to-mask, EXEC_ON_NOOP clear), so its input
-// registers (SPI_PS_INPUT_ENA/ADDR) need not be set. HTILE is not modeled (DepthTarget.hpp: the
-// surface's memory is not coherent with its resident image, HTILE fills only mark clears), so such a
-// blit changes nothing here. A register a rule needs that is absent makes it no blit.
-bool DepthMetadataBlit(const QueueState& queue);
-std::array<std::uint8_t, 8> ExportMappings(const State& state);
+struct DepthCopyPass {
+    DepthTarget source;
+    std::uint32_t sample;
+    ColorTarget color;
+};
+std::optional<DepthCopyPass> DecodeDepthCopyPass(const QueueState& queue);
+std::string DepthMaintenanceRejection(const QueueState& queue);
+bool DepthResummarizeDrawsNothing(const QueueState& queue);
+struct DepthRenderControl {
+    std::uint64_t address;
+    std::uint32_t samples;
+    std::uint32_t control;
+};
+std::optional<DepthRenderControl> DecodeDepthRenderControl(const QueueState& queue);
 // The message DecodeState (or the pixel stage decode after it) would throw for the register rules
 // this precheck covers, evaluated without exceptions before the draw is decoded; empty when they
 // pass (DecodeState still checks everything). A register a rule needs that is absent is no verdict.
 std::string DrawRejection(const QueueState& queue, bool indexed);
-bool PixelProgramUnset(const QueueState& queue);
+bool PixelProgramSkipped(const QueueState& queue);
 std::string NullPixelProgramRejection(const QueueState& queue);
 
 // The recording facade of the draw decoders (design_cpu_final M8, step 8a): every register read
@@ -176,7 +282,27 @@ struct RegisterRead {
     std::uint32_t offset;
 };
 std::vector<RegisterRead>*& RegisterReadLog();
+std::atomic<std::uint32_t>& RegisterReadLogsOpen();
+class RegisterReadLogScope {
+public:
+    explicit RegisterReadLogScope(std::vector<RegisterRead>* log) : active(log != nullptr) {
+        if (!active) return;
+        RegisterReadLogsOpen().fetch_add(1, std::memory_order_relaxed);
+        RegisterReadLog() = log;
+    }
+    ~RegisterReadLogScope() {
+        if (!active) return;
+        RegisterReadLog() = nullptr;
+        RegisterReadLogsOpen().fetch_sub(1, std::memory_order_relaxed);
+    }
+    RegisterReadLogScope(const RegisterReadLogScope&) = delete;
+    RegisterReadLogScope& operator=(const RegisterReadLogScope&) = delete;
+
+private:
+    bool active;
+};
 inline void NoteRegisterRead(RegisterBank bank, std::uint32_t offset) {
+    if (RegisterReadLogsOpen().load(std::memory_order_relaxed) == 0) return;
     if (auto* log = RegisterReadLog()) log->push_back({bank, offset});
 }
 inline const char* RegisterBankName(RegisterBank bank) {
@@ -195,31 +321,27 @@ struct DrawKeyRange {
     std::uint32_t first;
     std::uint32_t count;
 };
-inline constexpr std::array<DrawKeyRange, 47> DrawKeyRegisters{{
-    // DB_RENDER_CONTROL, DB_DEPTH_VIEW, DB_RENDER_OVERRIDE, DB_HTILE_DATA_BASE, DB_DEPTH_SIZE_XY, DB_DEPTH_BOUNDS_MIN/MAX,
-    // DB_STENCIL_CLEAR and DB_DEPTH_CLEAR with PA_SC_SCREEN_SCISSOR, DB_Z_INFO .. DB_STENCIL_WRITE_BASE,
-    // the *_BASE_HI words.
+inline constexpr std::array<DrawKeyRange, 52> DrawKeyRegisters{{
     {RegisterBank::Context, 0x000, 1}, {RegisterBank::Context, 0x002, 2}, {RegisterBank::Context, 0x005, 1}, {RegisterBank::Context, 0x007, 7}, {RegisterBank::Context, 0x010, 6}, {RegisterBank::Context, 0x01a, 5},
-    // The window offset/scissor and clip rect, the edge rule, the hardware screen offset,
-    // CB_TARGET_MASK/CB_SHADER_MASK, the generic and viewport 0 scissors, the viewport 0 depth clamp,
-    // the blend constants, DB_STENCIL_CONTROL and DB_STENCILREFMASK(_BF), the viewport 0 transform.
     {RegisterBank::Context, 0x080, 4}, {RegisterBank::Context, 0x08c, 4}, {RegisterBank::Context, 0x090, 2}, {RegisterBank::Context, 0x094, 2}, {RegisterBank::Context, 0x0b4, 2}, {RegisterBank::Context, 0x105, 4}, {RegisterBank::Context, 0x10b, 3}, {RegisterBank::Context, 0x10f, 6},
-    // SPI_PS_INPUT_CNTL_0..31, SPI_PS_INPUT_ENA/ADDR, SPI_PS_IN_CONTROL, SPI_SHADER_POS/Z/COL_FORMAT,
+    // SPI_PS_INPUT_CNTL_0..31, SPI_PS_INPUT_ENA/ADDR, SPI_PS_IN_CONTROL .. SPI_BARYC_CNTL, SPI_SHADER_POS/Z/COL_FORMAT,
     // CB_BLEND0..7_CONTROL, GE_MAX_OUTPUT_PER_SUBGROUP.
-    {RegisterBank::Context, 0x191, 32}, {RegisterBank::Context, 0x1b3, 2}, {RegisterBank::Context, 0x1b6, 1}, {RegisterBank::Context, 0x1c3, 3}, {RegisterBank::Context, 0x1e0, 8}, {RegisterBank::Context, 0x1ff, 1},
+    {RegisterBank::Context, 0x191, 32}, {RegisterBank::Context, 0x1b3, 2}, {RegisterBank::Context, 0x1b6, 3}, {RegisterBank::Context, 0x1c3, 3}, {RegisterBank::Context, 0x1e0, 8}, {RegisterBank::Context, 0x1ff, 1},
     // DB_DEPTH_CONTROL .. PA_CL_VS_OUT_CNTL, PA_SC_MODE_CNTL_0/1, VGT_GS_MODE, VGT_GS_VERT_ITEMSIZE,
-    // VGT_ESGS_RING_ITEMSIZE, VGT_SHADER_STAGES_EN/GS_ONCHIP, VGT_TF_PARAM/DB_ALPHA_TO_MASK, PA_SC_AA_CONFIG and
-    // PA_SU_VTX_CNTL, the sample masks, PA_SC_CONSERVATIVE_RASTERIZATION_CNTL; PA_SU_POLY_OFFSET_*.
-    {RegisterBank::Context, 0x200, 8}, {RegisterBank::Context, 0x292, 2}, {RegisterBank::Context, 0x29b, 1}, {RegisterBank::Context, 0x2ab, 1}, {RegisterBank::Context, 0x2ce, 1}, {RegisterBank::Context, 0x2d5, 2}, {RegisterBank::Context, 0x2db, 2}, {RegisterBank::Context, 0x2de, 6}, {RegisterBank::Context, 0x2f8, 2}, {RegisterBank::Context, 0x30e, 2}, {RegisterBank::Context, 0x313, 1},
-    // CB_COLOR0..7_BASE .. DCC_BASE (15 words a slot), CB_COLOR0..7_BASE_EXT, CMASK_BASE_EXT, DCC_BASE_EXT, ATTRIB2, ATTRIB3.
-    {RegisterBank::Context, 0x318, 0x78}, {RegisterBank::Context, 0x390, 8}, {RegisterBank::Context, 0x398, 8}, {RegisterBank::Context, 0x3a8, 0x18},
+    // PA_SU_VTX_CNTL, the sample masks, PA_SC_CONSERVATIVE_RASTERIZATION_CNTL.
+    {RegisterBank::Context, 0x200, 8}, {RegisterBank::Context, 0x286, 2}, {RegisterBank::Context, 0x292, 2}, {RegisterBank::Context, 0x29b, 1}, {RegisterBank::Context, 0x2a8, 2}, {RegisterBank::Context, 0x2ab, 1}, {RegisterBank::Context, 0x2af, 1}, {RegisterBank::Context, 0x2ce, 1}, {RegisterBank::Context, 0x2d5, 2}, {RegisterBank::Context, 0x2db, 2}, {RegisterBank::Context, 0x2de, 6}, {RegisterBank::Context, 0x2f8, 2}, {RegisterBank::Context, 0x2fe, 16}, {RegisterBank::Context, 0x30e, 2}, {RegisterBank::Context, 0x313, 1},
+    // CB_COLOR0..7_BASE .. DCC_BASE (15 words a slot), CB_COLOR0..7_BASE_EXT, DCC_BASE_EXT, ATTRIB2, ATTRIB3.
+    {RegisterBank::Context, 0x318, 0x78}, {RegisterBank::Context, 0x390, 8}, {RegisterBank::Context, 0x398, 0x10}, {RegisterBank::Context, 0x3a8, 0x18},
     // The pixel program address, RSRC2 and user words; the geometry-back user pointer and program
     // address; the vertex/geometry-front RSRC1/RSRC2 and user words; the vertex program address;
     // the hull user pointer, program address, RSRC2 and user words; the local program address.
-    {RegisterBank::Shader, 0x008, 0x24}, {RegisterBank::Shader, 0x082, 2}, {RegisterBank::Shader, 0x088, 2}, {RegisterBank::Shader, 0x08a, 0x22}, {RegisterBank::Shader, 0x0c8, 2}, {RegisterBank::Shader, 0x102, 2}, {RegisterBank::Shader, 0x108, 2}, {RegisterBank::Shader, 0x10b, 0x21}, {RegisterBank::Shader, 0x148, 2},
+    {RegisterBank::Shader, 0x008, 0x24}, {RegisterBank::Shader, 0x048, 0x14}, {RegisterBank::Shader, 0x082, 2}, {RegisterBank::Shader, 0x088, 2}, {RegisterBank::Shader, 0x08a, 0x22}, {RegisterBank::Shader, 0x0c8, 2}, {RegisterBank::Shader, 0x102, 2}, {RegisterBank::Shader, 0x108, 2}, {RegisterBank::Shader, 0x10b, 0x21}, {RegisterBank::Shader, 0x148, 2},
     // GE_PRIM_TYPE, GE_MULTI_PRIM_IB_RESET_EN, the geometry subgroup sizes.
     {RegisterBank::UserConfig, 0x242, 1}, {RegisterBank::UserConfig, 0x24b, 1}, {RegisterBank::UserConfig, 0x25b, 1},
 }};
+bool SplitsAlternateAlpha(const State& state);
+bool StencilOperationValueReplaces(const Registers& context);
+bool StencilReferenceUnused(const State& state);
 // Whether DrawKeyRegisters holds the read.
 bool DrawKeyCovers(RegisterRead read);
 

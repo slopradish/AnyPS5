@@ -23,17 +23,27 @@ struct PassAccess {
     std::span<const std::pair<VkImage, bool>> attachments;
     bool anyReads = false;
     bool anyWrites = false;
-    bool gds = false;
+    GuestRangeList writeOnly = {};
 };
 
-enum class PassHazard : std::uint8_t { None, ReadAfterWrite, WriteAfterWrite, WriteAfterRead, Image, UnknownRead, UnknownWrite, Gds, Count };
-inline constexpr std::array<const char*, static_cast<std::size_t>(PassHazard::Count)> PassHazardNames{"none", "raw", "waw", "war", "image", "unknown-read", "unknown-write", "gds"};
+enum class PassHazard : std::uint8_t { None, ReadAfterWrite, WriteAfterWrite, WriteAfterRead, Image, UnknownRead, UnknownWrite };
 
-enum class PassBreak : std::uint8_t { Capture, ReadsTarget, GpuIndirect, MeshIndirect, DepthClear, FirstInBatch, OtherWork, Key, PreviousWrote, Hazard, SampleSlots, None, Count = None };
-inline constexpr std::array<const char*, static_cast<std::size_t>(PassBreak::Count)> PassBreakNames{"capture", "reads-target", "gpu-indirect", "mesh-indirect", "depth-clear", "first-in-batch", "other-work", "key", "previous-wrote", "hazard", "sample-slots"};
+enum class PassBreak : std::uint8_t { Continued, NewBatch, Command, Label, Samples, Forced, Segment, Key, ReadAfterWrite, WriteAfterWrite, WriteAfterRead, Image, UnknownRead, UnknownWrite, Count };
+constexpr std::size_t PassBreakCount = static_cast<std::size_t>(PassBreak::Count);
+constexpr std::array<const char*, PassBreakCount> PassBreakNames{"continued", "new batch", "command", "label", "samples", "forced", "segment", "key", "read after write", "write after write", "write after read", "image", "unknown read", "unknown write"};
 
-enum class PassBlock : std::uint8_t { None, Lease, Completion, Buffers, Images, Gds, Count };
-inline constexpr std::array<const char*, static_cast<std::size_t>(PassBlock::Count)> PassBlockNames{"none", "lease", "completion", "buffers", "images", "gds"};
+constexpr PassBreak PassBreakFor(PassHazard hazard) {
+    switch (hazard) {
+    case PassHazard::ReadAfterWrite: return PassBreak::ReadAfterWrite;
+    case PassHazard::WriteAfterWrite: return PassBreak::WriteAfterWrite;
+    case PassHazard::WriteAfterRead: return PassBreak::WriteAfterRead;
+    case PassHazard::Image: return PassBreak::Image;
+    case PassHazard::UnknownRead: return PassBreak::UnknownRead;
+    case PassHazard::UnknownWrite: return PassBreak::UnknownWrite;
+    case PassHazard::None: break;
+    }
+    return PassBreak::Key;
+}
 
 class GuestRangeSet {
 public:
@@ -41,26 +51,19 @@ public:
     bool Overlaps(std::uint64_t begin, std::uint64_t end) const;
     bool Empty() const { return ranges.empty(); }
     std::size_t Size() const { return ranges.size(); }
+    GuestRangeList Ranges() const { return ranges; }
     void Clear() { ranges.clear(); }
 
 private:
     std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
 };
 
-struct QueuedWrite {
-    std::uint64_t begin;
-    std::uint64_t end;
-    bool computed;
-    std::uint8_t kind = 0;
-};
-
-std::vector<std::size_t> QueuedWriteGroups(std::span<const QueuedWrite> writes);
-
 class PassHazards {
 public:
     PassHazard Check(const PassAccess& access, bool samePass) const;
     void Add(const PassAccess& access);
     void BeginPass() { ++pass; }
+    void SealWriteOnly();
     void Clear();
     bool Empty() const;
 
@@ -73,12 +76,12 @@ private:
     bool overlapsAny(const GuestRangeSet& set, GuestRangeList ranges) const;
     GuestRangeSet reads;
     GuestRangeSet writes;
+    GuestRangeSet writeOnly;
     std::vector<std::pair<VkImage, bool>> images;
     std::vector<Attachment> attachments;
     std::uint64_t pass = 0;
     bool anyReads = false;
     bool anyWrites = false;
-    bool gds = false;
 };
 
 }

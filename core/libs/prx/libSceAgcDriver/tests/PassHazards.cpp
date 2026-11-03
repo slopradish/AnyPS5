@@ -1,5 +1,4 @@
 #include "prx/libSceAgcDriver/Graphics/include/PassHazards.hpp"
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -35,9 +34,9 @@ struct Use {
     Images attachments;
     bool anyReads = false;
     bool anyWrites = false;
-    bool gds = false;
+    Ranges writeOnly;
 
-    PassAccess View() const { return {reads, writes, images, attachments, anyReads, anyWrites, gds}; }
+    PassAccess View() const { return {reads, writes, images, attachments, anyReads, anyWrites, writeOnly}; }
 };
 
 void testRangeSet() {
@@ -184,83 +183,75 @@ void testAttachments() {
     Expect(hazards.Check(renderIntoStored.View(), true) == PassHazard::Image, "rendering into an image a draw stored to");
 }
 
-void testGds() {
+}
+
+void testWriteOnly() {
     PassHazards hazards;
     hazards.BeginPass();
-    Use gds;
-    gds.gds = true;
-    Expect(hazards.Check(gds.View(), true) == PassHazard::None, "first GDS user");
-    hazards.Add(gds.View());
-    Expect(hazards.Check(gds.View(), true) == PassHazard::Gds, "two GDS users");
-    Use plain;
-    plain.reads = {{0x10, 0x20}};
-    Expect(hazards.Check(plain.View(), true) == PassHazard::None, "a draw without GDS after one with it");
-}
-
-using Groups = std::vector<std::size_t>;
-
-std::vector<std::uint8_t> ProgramOrder(const std::vector<QueuedWrite>& writes, std::size_t bytes) {
-    std::vector<std::uint8_t> memory(bytes, 0);
-    for (std::size_t i = 0; i < writes.size(); ++i) {
-        for (auto at = writes[i].begin; at < writes[i].end; ++at) memory[at] = static_cast<std::uint8_t>(i + 1);
-    }
-    return memory;
-}
-
-std::vector<std::uint8_t> RecordedOrder(const std::vector<QueuedWrite>& writes, const Groups& groups, std::size_t bytes) {
-    std::vector<std::uint8_t> memory(bytes, 0);
-    std::size_t first = 0;
-    for (const auto end : groups) {
-        for (const int order : {0, 1, 2}) {
-            for (auto i = first; i < end; ++i) {
-                if ((writes[i].computed ? 1 + writes[i].kind : 0) != order) continue;
-                for (auto at = writes[i].begin; at < writes[i].end; ++at) memory[at] = static_cast<std::uint8_t>(i + 1);
-            }
-        }
-        first = end;
-    }
-    return memory;
-}
-
-void testQueuedWriteGroups() {
-    Expect(QueuedWriteGroups({}).empty(), "no queued writes, no groups");
-    const std::vector<QueuedWrite> query{{0x100, 0x200, false}, {0x100, 0x1f8, true}, {0x108, 0x200, true}, {0x200, 0x300, false}, {0x200, 0x2f8, true}, {0x208, 0x300, true}};
-    Expect(QueuedWriteGroups(query) == Groups{6}, "a clear, a begin dump and an end dump per query slot are one group");
-    const std::vector<QueuedWrite> reused{{0x100, 0x1f8, true}, {0x100, 0x200, false}, {0x100, 0x1f8, true}};
-    Expect(QueuedWriteGroups(reused) == Groups{1, 3}, "a store over a computed write of the group starts a new group");
-    const std::vector<QueuedWrite> apart{{0x100, 0x1f8, true}, {0x1f8, 0x200, false}, {0x300, 0x310, false}};
-    Expect(QueuedWriteGroups(apart) == Groups{3}, "stores beside the computed writes stay in their group");
-    const std::vector<QueuedWrite> stores{{0x100, 0x110, false}, {0x100, 0x110, false}};
-    Expect(QueuedWriteGroups(stores) == Groups{2}, "stores alone are one group (their own WAW barriers order them)");
-    const std::vector<QueuedWrite> kinds{{0x100, 0x1f8, true, 0}, {0x100, 0x108, true, 1}, {0x300, 0x308, true, 1}};
-    Expect(QueuedWriteGroups(kinds) == Groups{1, 3}, "a computed write over a computed write of another kind starts a new group");
-    const std::vector<QueuedWrite> sameKind{{0x100, 0x108, true, 1}, {0x100, 0x108, true, 1}, {0x200, 0x2f8, true, 0}};
-    Expect(QueuedWriteGroups(sameKind) == Groups{3}, "computed writes of one kind stay in their group (their dispatch orders them)");
-    std::uint64_t seed = 0x9e3779b97f4a7c15ull;
-    const auto next = [&](std::uint64_t bound) {
-        seed ^= seed << 13u;
-        seed ^= seed >> 7u;
-        seed ^= seed << 17u;
-        return seed % bound;
-    };
-    constexpr std::size_t bytes = 64;
-    int mismatches = 0;
-    for (int round = 0; round < 20000; ++round) {
-        std::vector<QueuedWrite> writes;
-        const auto count = 1 + next(12);
-        for (std::uint64_t i = 0; i < count; ++i) {
-            const auto begin = next(bytes - 1);
-            const auto end = begin + 1 + next(std::min<std::uint64_t>(16, bytes - begin));
-            const auto kind = next(3);
-            writes.push_back({begin, std::min<std::uint64_t>(end, bytes), kind != 0, static_cast<std::uint8_t>(kind == 2 ? 1 : 0)});
-        }
-        const auto groups = QueuedWriteGroups(writes);
-        bool valid = !groups.empty() && groups.back() == writes.size() && std::is_sorted(groups.begin(), groups.end());
-        if (!valid || RecordedOrder(writes, groups, bytes) != ProgramOrder(writes, bytes)) ++mismatches;
-    }
-    Expect(mismatches == 0, "recording each group's stores before its computed writes keeps the program order's final bytes");
-}
-
+    Use feedback;
+    feedback.writeOnly = {{0x1000, 0x8f80}};
+    hazards.Add(feedback.View());
+    Expect(hazards.Check(feedback.View(), true) == PassHazard::None, "draws only storing to the same buffer continue the pass");
+    Use reader;
+    reader.reads = {{0x2000, 0x2100}};
+    Expect(hazards.Check(reader.View(), true) == PassHazard::ReadAfterWrite, "a read of write-only stores of the pass");
+    Use writer;
+    writer.writes = {{0x8000, 0x9000}};
+    Expect(hazards.Check(writer.View(), true) == PassHazard::WriteAfterWrite, "a read-write use after write-only stores");
+    Use unknownReader;
+    unknownReader.anyReads = true;
+    Expect(hazards.Check(unknownReader.View(), true) == PassHazard::UnknownRead, "unknown reads after write-only stores");
+    Use elsewhere;
+    elsewhere.writeOnly = {{0x9000, 0xa000}};
+    elsewhere.reads = {{0xa000, 0xb000}};
+    Expect(hazards.Check(elsewhere.View(), true) == PassHazard::None, "write-only stores and reads elsewhere");
+    hazards.Clear();
+    hazards.BeginPass();
+    Use readWrite;
+    readWrite.reads = {{0x1000, 0x2000}};
+    readWrite.writes = {{0x1000, 0x2000}};
+    hazards.Add(readWrite.View());
+    Use storesOver;
+    storesOver.writeOnly = {{0x1800, 0x1900}};
+    Expect(hazards.Check(storesOver.View(), true) == PassHazard::WriteAfterWrite, "write-only stores after a read-write use");
+    hazards.Clear();
+    hazards.BeginPass();
+    Use readOnly;
+    readOnly.reads = {{0x1000, 0x2000}};
+    hazards.Add(readOnly.View());
+    Expect(hazards.Check(storesOver.View(), true) == PassHazard::WriteAfterRead, "write-only stores after a read");
+    hazards.Clear();
+    hazards.BeginPass();
+    Use unknownWriter;
+    unknownWriter.anyWrites = true;
+    unknownWriter.anyReads = true;
+    hazards.Add(feedback.View());
+    Expect(hazards.Check(unknownWriter.View(), true) == PassHazard::UnknownWrite, "unknown writes after write-only stores");
+    hazards.Clear();
+    hazards.Add(unknownWriter.View());
+    Expect(hazards.Check(feedback.View(), true) == PassHazard::UnknownWrite, "write-only stores after unknown writes");
+    hazards.Clear();
+    Use unknownRead;
+    unknownRead.anyReads = true;
+    hazards.Add(unknownRead.View());
+    Expect(hazards.Check(feedback.View(), true) == PassHazard::UnknownRead, "write-only stores after unknown reads");
+    hazards.Clear();
+    hazards.BeginPass();
+    hazards.Add(feedback.View());
+    hazards.SealWriteOnly();
+    Expect(hazards.Check(feedback.View(), true) == PassHazard::WriteAfterWrite, "write-only stores over stores sealed by a flush");
+    Use afterSeal;
+    afterSeal.writeOnly = {{0x9000, 0xa000}};
+    Expect(hazards.Check(afterSeal.View(), true) == PassHazard::None, "write-only stores elsewhere after a seal");
+    hazards.Add(afterSeal.View());
+    Expect(hazards.Check(afterSeal.View(), true) == PassHazard::None, "write-only stores after a seal continue the pass among themselves");
+    hazards.Clear();
+    Expect(hazards.Check(feedback.View(), true) == PassHazard::None, "a cleared seal");
+    hazards.Clear();
+    hazards.Add(feedback.View());
+    Expect(!hazards.Empty(), "write-only stores are tracked");
+    hazards.Clear();
+    Expect(hazards.Empty(), "cleared write-only stores");
 }
 
 int main() {
@@ -269,8 +260,7 @@ int main() {
     testUnknown();
     testImages();
     testAttachments();
-    testGds();
-    testQueuedWriteGroups();
+    testWriteOnly();
     if (failures != 0) {
         std::fprintf(stderr, "%d pass hazard checks failed\n", failures);
         return 1;

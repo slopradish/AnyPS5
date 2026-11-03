@@ -1,3 +1,4 @@
+#include "prx/libSceAgc/include/Agc.hpp"
 #include <cstdint>
 #include <cstddef>
 #include "SceTypes.hpp"
@@ -5,149 +6,19 @@
 
 extern "C" {
 
-int APS5_VABI sceAgcAcbPushMarkerSpan() {
+int APS5_VABI sceAgcAcquireMemSetEngine(std::uint32_t* packet, std::uint8_t engine) {
  NotImplemented_nid_no_patch(__func__);
  return 0;
 }
 
-int APS5_VABI sceAgcAcbSetMarkerSpan() {
+std::uint32_t* APS5_VABI sceAgcCbMemsetExclusive(CommandBuffer* buffer, void* destination, const void* pattern, std::uint64_t size) {
  NotImplemented_nid_no_patch(__func__);
  return 0;
 }
 
-int APS5_VABI sceAgcAcbSetWorkloadComplete() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcAcbSetWorkloadStreamInactive() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcAcbSetWorkloadsActive() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcAcquireMemSetEngine() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcDcbPushMarkerSpan() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcDcbSetMarkerSpan() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcDcbSetWorkloadStreamInactive() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcDebugRaiseException() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcGetDataPacketPayloadRange() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcGetDefaultCxStateFlat() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcGetGsOversubscription() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcGetIsTrinityMode() {
+int APS5_VABI sceAgcAcbInitializeDefaultHardwareState() {
+    NotImplemented_nid_no_patch(__func__);
     return 0;
-}
-
-int APS5_VABI sceAgcGetSemaphoreLabel() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-int APS5_VABI sceAgcSetAmmSemaphoreMemory() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("6nths4DHNrs", sceAgcUnknown_6nths4DHNrs);
-int APS5_VABI sceAgcUnknown_6nths4DHNrs() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("7Wa3aeJgeVU", sceAgcUnknown_7Wa3aeJgeVU);
-int APS5_VABI sceAgcUnknown_7Wa3aeJgeVU() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("EJBA4dbmvfg", sceAgcUnknown_EJBA4dbmvfg);
-int APS5_VABI sceAgcUnknown_EJBA4dbmvfg() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("ICkECTBxrMw", sceAgcUnknown_ICkECTBxrMw);
-int APS5_VABI sceAgcUnknown_ICkECTBxrMw() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("RTpj-tIlvZc", sceAgcUnknown_RTpj_MtIlvZc);
-int APS5_VABI sceAgcUnknown_RTpj_MtIlvZc() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("SwI6QxqwAC0", sceAgcUnknown_SwI6QxqwAC0);
-int APS5_VABI sceAgcUnknown_SwI6QxqwAC0() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("d4NZIlguzv0", sceAgcUnknown_d4NZIlguzv0);
-int APS5_VABI sceAgcUnknown_d4NZIlguzv0() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("eAy8eGNsCuU", sceAgcUnknown_eAy8eGNsCuU);
-int APS5_VABI sceAgcUnknown_eAy8eGNsCuU() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("rP5xLdOf26k", sceAgcUnknown_rP5xLdOf26k);
-int APS5_VABI sceAgcUnknown_rP5xLdOf26k() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("tmy-+rBpspY", sceAgcUnknown_tmy_M_PrBpspY);
-int APS5_VABI sceAgcUnknown_tmy_M_PrBpspY() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
-APS5_EXPORT("y5K5tPktiL8", sceAgcUnknown_y5K5tPktiL8);
-int APS5_VABI sceAgcUnknown_y5K5tPktiL8() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
 }
 
 }

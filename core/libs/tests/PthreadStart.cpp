@@ -1,21 +1,12 @@
-#include "prx/libkernel/Pthread/Pthread.hpp"
+#include "prx/libkernel/include/Api.hpp"
+#include "prx/libkernel/Pthread/include/ThreadLifecycle.hpp"
+#include "prx/libkernel/Pthread/include/Pthread.hpp"
 #include <future>
 #include <iostream>
 #include <stdexcept>
 #ifdef _WIN32
 #include <windows.h>
 #endif
-
-extern "C" int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, PthreadEntry entry, void* arg, const char* name);
-extern "C" int APS5_VABI scePthreadJoin(Pthread thread, void** retval);
-extern "C" int APS5_VABI scePthreadAttrInit(PthreadAttr* attr);
-extern "C" int APS5_VABI scePthreadAttrDestroy(PthreadAttr* attr);
-extern "C" int APS5_VABI scePthreadAttrGet(Pthread thread, PthreadAttr* attr);
-extern "C" int APS5_VABI scePthreadAttrSetstacksize(PthreadAttr* attr, std::size_t size);
-extern "C" int APS5_VABI scePthreadAttrGetstack(const PthreadAttr* attr, void** address, std::size_t* size);
-extern "C" Pthread APS5_VABI scePthreadSelf();
-extern "C" void APS5_VABI scePthreadExit(void* retval);
-extern "C" int APS5_VABI scePthreadDetach(Pthread thread);
 
 struct ThreadContext {
     Pthread thread = nullptr;
@@ -41,8 +32,7 @@ static void* APS5_VABI CheckThread(void* arg) {
     if (context.thread->threadId != std::this_thread::get_id() || !context.thread->nativeHandle)
         throw std::runtime_error("Native thread was not initialized");
 #else
-    if (context.thread->_thr.get_id() != std::this_thread::get_id()) throw std::runtime_error("Thread object was not initialized");
-    if (!context.thread->_thr.joinable()) throw std::runtime_error("Thread object is not joinable");
+    if (!pthread_equal(context.thread->hostThread, pthread_self())) throw std::runtime_error("Thread object was not initialized");
 #endif
     PthreadAttr attr = nullptr;
     if (scePthreadAttrInit(&attr) != 0) throw std::runtime_error("Attribute initialization failed");

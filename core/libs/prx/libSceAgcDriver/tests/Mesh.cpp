@@ -1,15 +1,20 @@
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
 #include "Recompiler.hpp"
+#include "MeshGeometryFixture.hpp"
+#include "execution/VulkanTestDevice.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <new>
 #include <span>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -22,47 +27,31 @@ constexpr std::uint32_t Height = 128;
 constexpr std::array<std::uint8_t, 4> Background{16, 24, 40, 255};
 alignas(256) std::array<std::byte, Width * Height * 4> Pixels{};
 
-alignas(256) constexpr std::array<std::uint32_t, 104> GeometryCode{
-    0x8f6a9003, 0x94fe6ac1, 0xbf88000b, 0xd7650006, 0x000100c1, 0xd7660006, 0x00020cc1, 0x93ebff03,
-    0x00040018, 0xd7460006, 0x04190c6b, 0x340c0c82, 0xd8340000, 0x00000506, 0xbf8cc07f, 0xbefe04c1,
-    0xbf8a0000, 0x938dff02, 0x00090016, 0x9382ff03, 0x00040018, 0x938cff03, 0x00080008, 0xd7650009,
-    0x000100c1, 0xd7660009, 0x000212c1, 0xd746000a, 0x04250c02, 0x7da8120c, 0xbf88002e, 0x361600ff,
-    0x0000ffff, 0x2c180090, 0x361a02ff, 0x0000ffff, 0xd8d80000, 0x0b00000b, 0xd8d80000, 0x0c00000c,
-    0xd8d80000, 0x0d00000d, 0xbf8cc07f, 0xe0382000, 0x8002100b, 0xe0382010, 0x8002140b, 0xe0382000,
-    0x8002180c, 0xe0382010, 0x80021c0c, 0xe0382000, 0x8002200d, 0xe0382010, 0x8002240d, 0x161c1483,
-    0x161e14ff, 0x00000060, 0xbf8c3f70, 0xdb7c0400, 0x0000100f, 0xdb7c0410, 0x0000140f, 0xdb7c0420,
-    0x0000180f, 0xdb7c0430, 0x00001c0f, 0xdb7c0440, 0x0000200f, 0xdb7c0450, 0x0000240f, 0x4a501c81,
-    0x4a521c82, 0x3450508a, 0x34525294, 0xd772002a, 0x04a6510e, 0xbf8cc07f, 0xbefe04c1, 0xbf8a0000,
-    0x930e830d, 0xbf078002, 0xbf850003, 0x8f0f8c0d, 0x887c0f0e, 0xbf900009, 0x7da8140d, 0xbf880002,
-    0xf8000941, 0x0000002a, 0xbefe04c1, 0x7da8140e, 0xbf88000a, 0x34561485, 0xdbfc0400, 0x2c00002b,
-    0xdbfc0410, 0x3000002b, 0xbf8cc07f, 0xf80008cf, 0x2f2e2d2c, 0xf800020f, 0x33323130, 0xbf810000,
+constexpr auto& GeometryCode = AgcDriver::Test::MeshGeometryCode;
+
+alignas(256) constexpr auto Wave32GeometryCode = [] {
+    auto code = GeometryCode;
+    code[10] = 0x04190a6bu;
+    code[28] = 0x04250a02u;
+    return code;
+}();
+
+alignas(256) constexpr std::array<std::uint32_t, 25> FastLaunchCode{
+    0xd7650000, 0x000100c1, 0x7e000505, 0x93018300, 0x4a020001, 0xe0382000, 0x80020201, 0xe0382010,
+    0x80020601, 0xb07c1003, 0xbf900009, 0xbf8c3f70, 0x7d880083, 0xbefe036a, 0xf80008cf, 0x05040302,
+    0xf800020f, 0x09080706, 0x7d840080, 0xbefe036a, 0x7e1402ff, 0x00200400, 0xf8000941, 0x0000000a,
+    0xbf810000,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 27> LineStripCode{
+    0xd7650000, 0x000100c1, 0x7e000505, 0x93018300, 0x4a020001, 0xe0382000, 0x80020201, 0xe0382010,
+    0x80020601, 0xb07c2003, 0xbf900009, 0xbf8c3f70, 0x7d880083, 0xbefe036a, 0xf80008cf, 0x05040302,
+    0xf800020f, 0x09080706, 0x7d880082, 0xbefe036a, 0x161400ff, 0x00000401, 0x4a1414ff, 0x00000400,
+    0xf8000941, 0x0000000a, 0xbf810000,
 };
 
 alignas(256) constexpr std::array<std::uint32_t, 7> PixelCode{
     0xc8020002, 0xc8060102, 0xc80a0202, 0xc80e0302, 0xf800180f, 0x03020100, 0xbf810000,
-};
-
-// A passthrough NGG program (llvm-mc -triple=amdgcn -mcpu=gfx1030): wave 0 sends GS_ALLOC_REQ for
-// the subgroup's vertices (GS_TG_INFO, s2 [20:12]) and primitives (s2 [30:22]); the primitive
-// threads export v0 as their primitive, the vertex threads fetch their vertex v5 (32-byte records,
-// V# in s[8:11]) and export position and color.
-//
-//   s_bfe_u32 s12, s2, 0x9000c / s_bfe_u32 s13, s2, 0x90016 / s_lshl_b32 s14, s13, 12
-//   s_or_b32 m0, s12, s14 / s_sendmsg sendmsg(MSG_GS_ALLOC_REQ)
-//   v_mbcnt_lo_u32_b32 v9, -1, 0 / v_mbcnt_hi_u32_b32 v9, -1, v9
-//   v_cmpx_gt_u32 s13, v9 / s_cbranch_execz prim_done / exp prim v0, off, off, off done
-// prim_done:
-//   s_mov_b64 exec, -1 / v_cmpx_gt_u32 s12, v9 / s_cbranch_execz end
-//   buffer_load_dwordx4 v[16:19], v5, s[8:11], 0 idxen
-//   buffer_load_dwordx4 v[20:23], v5, s[8:11], 0 idxen offset:16 / s_waitcnt vmcnt(0)
-//   exp pos0 v16, v17, v18, v19 done / exp param0 v20, v21, v22, v23
-// end:
-//   s_endpgm
-alignas(256) constexpr std::array<std::uint32_t, 28> PassthroughCode{
-    0x938cff02, 0x0009000c, 0x938dff02, 0x00090016, 0x8f0e8c0d, 0x887c0e0c, 0xbf900009, 0xd7650009,
-    0x000100c1, 0xd7660009, 0x000212c1, 0x7da8120d, 0xbf880002, 0xf8000941, 0x00000000, 0xbefe04c1,
-    0x7da8120c, 0xbf880009, 0xe0382000, 0x80021005, 0xe0382010, 0x80021405, 0xbf8c3f70, 0xf80008cf,
-    0x13121110, 0xf800020f, 0x17161514, 0xbf810000,
 };
 
 struct Vertex {
@@ -103,19 +92,16 @@ std::size_t CellPixel(std::uint32_t triangle) {
 alignas(256) std::array<Vertex, 3 * Triangles> Scrambled{};
 alignas(256) std::array<std::uint16_t, 3 * Triangles> Indices{};
 alignas(256) std::array<Vertex, 3 * Triangles> Ordered{};
+constexpr std::uint32_t WideFastLaunchSkipped = 65535;
+alignas(256) std::array<Vertex, 3 * (WideFastLaunchSkipped + Triangles)> WideFastLaunch{};
 alignas(256) std::array<Vertex, 2 * Columns + 2> Strip{};
 
-constexpr std::uint32_t GridColumns = 12;
-constexpr std::uint32_t GridRows = 8;
-constexpr std::uint32_t GridVertices = (GridColumns + 1) * (GridRows + 1);
-constexpr std::uint32_t BigBase = 70000;
-alignas(256) std::array<Vertex, GridVertices> Grid{};
-alignas(256) std::array<Vertex, BigBase + GridVertices> BigVertices{};
-std::vector<std::uint32_t> GridList;
-alignas(256) std::array<std::uint16_t, 2048> GridIndices16{};
-alignas(256) std::array<std::uint32_t, 2048> GridIndices32{};
-alignas(256) std::array<std::uint32_t, 2048> BigIndices32{};
-alignas(256) std::array<std::uint16_t, 256> GridStrip16{};
+constexpr std::uint32_t LineStrips = 4;
+alignas(256) std::array<Vertex, 3 * LineStrips> LineStripVertices{};
+
+std::uint32_t LineStripRow(std::uint32_t strip) {
+    return 16u + 28u * strip;
+}
 
 constexpr std::uint32_t FanRim = 8;
 constexpr float FanStep = 6.28318530718f / FanRim;
@@ -123,6 +109,9 @@ alignas(256) std::array<Vertex, FanRim + 1> Fan{};
 alignas(256) std::array<Vertex, FanRim + 1> FanScrambled{};
 alignas(256) std::array<std::uint16_t, FanRim + 1> FanIndices{};
 alignas(256) std::array<std::uint16_t, FanRim + 1> FanRestart{};
+alignas(256) std::array<Vertex, 4 * Columns> Quads{};
+alignas(256) std::array<std::uint16_t, 5 * Columns> QuadStrips{};
+alignas(256) std::array<std::uint32_t, 5 * Columns> QuadStrips32{};
 
 std::array<std::uint32_t, 4> VertexBufferDescriptor(const void* vertices, std::uint32_t count) {
     const auto address = reinterpret_cast<std::uintptr_t>(vertices);
@@ -154,24 +143,50 @@ struct MeshDraw {
     std::array<std::uint32_t, 4> vertexBuffer;
     std::uint32_t geometryPushBytes = ShaderRecompiler::MeshDrawPushOffsetBytes;
     bool restart = false;
-    std::span<const std::uint32_t> code = GeometryCode;
+    std::uint32_t waveSize = 64u;
+    VkCullModeFlags cull = VK_CULL_MODE_NONE;
+    std::span<const std::uint32_t> code = {};
+    std::uint32_t stagesRegister = 0x20u;
+    ShaderRecompiler::ShaderVertexStageInfo vertex{};
 };
+
+bool ReadsNumWorkgroups(std::span<const std::uint32_t> words) {
+    constexpr std::uint32_t OpDecorate = 71;
+    constexpr std::uint32_t OpAccessChain = 65;
+    constexpr std::uint32_t OpLoad = 61;
+    constexpr std::uint32_t DecorationBuiltIn = 11;
+    constexpr std::uint32_t BuiltInNumWorkgroups = 24;
+    std::uint32_t variable = 0;
+    std::vector<std::uint32_t> pointers;
+    for (std::size_t at = 5; at < words.size();) {
+        const auto length = words[at] >> 16u;
+        const auto opcode = words[at] & 0xffffu;
+        if (length == 0 || at + length > words.size()) return false;
+        if (opcode == OpDecorate && length == 4 && words[at + 2] == DecorationBuiltIn && words[at + 3] == BuiltInNumWorkgroups) variable = words[at + 1];
+        if (opcode == OpAccessChain && length >= 4 && variable != 0 && words[at + 3] == variable) pointers.push_back(words[at + 2]);
+        if (opcode == OpLoad && length >= 4 && variable != 0 && (words[at + 3] == variable || std::find(pointers.begin(), pointers.end(), words[at + 3]) != pointers.end())) return true;
+        at += length;
+    }
+    return false;
+}
 
 void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
     const auto target = device.Target();
     std::vector<std::uint32_t> userData(12, 0u);
-    const auto index = AgcDriver::Graphics::MeshIndexBufferDescriptor(setup.draw, reinterpret_cast<std::uintptr_t>(GeometryCode.data()));
+    const auto index = AgcDriver::Graphics::MeshIndexBufferDescriptor(setup.draw);
     std::copy(index.begin(), index.end(), userData.begin() + ShaderRecompiler::MeshIndexBufferUserWord);
     std::copy(setup.vertexBuffer.begin(), setup.vertexBuffer.end(), userData.begin() + 8);
-    const std::array<ShaderRecompiler::MemoryRegion, 1> geometryMemory{{{reinterpret_cast<std::uintptr_t>(setup.code.data()), std::as_bytes(setup.code)}}};
+    const std::span<const std::uint32_t> code = !setup.code.empty() ? setup.code : setup.waveSize == 32u ? std::span<const std::uint32_t>(Wave32GeometryCode) : std::span<const std::uint32_t>(GeometryCode);
+    const std::array<ShaderRecompiler::MemoryRegion, 1> geometryMemory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(std::span(code))}}};
     ShaderRecompiler::RecompileRequest geometry{
-        {ShaderStage::Mesh, reinterpret_cast<std::uintptr_t>(setup.code.data()), setup.code, 0, {}},
-        {64, 0, userData, std::nullopt, std::nullopt, ShaderRecompiler::ShaderVertexStageInfo{}, geometryMemory},
+        {ShaderStage::Mesh, reinterpret_cast<std::uintptr_t>(code.data()), code, 0, {}},
+        {setup.waveSize, 0, userData, std::nullopt, std::nullopt, setup.vertex, geometryMemory},
         target,
         {0, 0, 0, setup.geometryPushBytes},
         ShaderRecompiler::GraphicsCompileContext{0, {}, setup.mesh, std::nullopt, {setup.draw.indexAddress, setup.draw.indexCount, setup.draw.indexSize, setup.draw.instanceCount}}
     };
     const auto meshResult = ShaderRecompiler::Recompile(geometry);
+    Require(ReadsNumWorkgroups(meshResult.spirv), "the mesh program does not read NumWorkgroups, so RADV can keep a previous vertex pipeline's user SGPR count for its dispatch");
     const auto meshPush = static_cast<std::uint32_t>(meshResult.pushConstants.size());
     Require((meshPush == 0) == (setup.geometryPushBytes == 0), "the geometry program's push data does not follow its layout");
 
@@ -185,17 +200,21 @@ void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
         {ShaderStage::Fragment, reinterpret_cast<std::uintptr_t>(PixelCode.data()), PixelCode, 0, {}},
         {64, 0, {}, std::nullopt, pixel, std::nullopt, pixelMemory},
         target,
-        {0, 0, meshPush, ShaderRecompiler::MeshDrawPushOffsetBytes - meshPush},
+        target.fixedPushSlots ? PixelPushLayout(meshPush, target) : ShaderRecompiler::BindingLayout{0, 0, meshPush, ShaderRecompiler::MeshDrawPushOffsetBytes - meshPush},
         std::nullopt
     };
     const auto pixelResult = ShaderRecompiler::Recompile(fragment);
     const std::array<AgcDriver::Graphics::CompiledShader, 2> shaders{{
         {ShaderStage::Mesh, &meshResult, 0},
-        {ShaderStage::Fragment, &pixelResult, meshPush}
+        {ShaderStage::Fragment, &pixelResult, PixelPushOffset(meshPush, target)}
     }};
 
     AgcDriver::Graphics::State state{};
-    state.stages = {AgcDriver::Graphics::ShaderPath::Geometry, 0x20u, 64, 64, setup.mesh, std::nullopt};
+    state.stages = {AgcDriver::Graphics::ShaderPath::Geometry, setup.stagesRegister, setup.waveSize, 64, setup.mesh, std::nullopt};
+    state.pointSize = setup.vertex.pointSize;
+    state.pointSizeMin = setup.vertex.pointSizeMin;
+    state.pointSizeMax = setup.vertex.pointSizeMax;
+    state.paClVsOutCntl = setup.vertex.paClVsOutCntl;
     state.color = {reinterpret_cast<std::uintptr_t>(Pixels.data()), {Width, Height}, VK_FORMAT_R8G8B8A8_UNORM, Pixels.size(), 0xe4u};
     state.colors = {state.color};
     state.hasColorTarget = true;
@@ -205,7 +224,7 @@ void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
     state.viewport = {0, static_cast<float>(Height), static_cast<float>(Width), -static_cast<float>(Height), 0, 1};
     state.negativeOneToOne = false;
     state.scissor = {{0, 0}, {Width, Height}};
-    state.cullMode = VK_CULL_MODE_NONE;
+    state.cullMode = setup.cull;
     state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     state.blend.colorWriteMask = 15;
     state.blends = {state.blend};
@@ -214,58 +233,9 @@ void DrawMesh(AgcDriver::VulkanDevice& device, const MeshDraw& setup) {
     device.WaitIdle();
 }
 
-void DrawVertexPath(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, std::uint32_t vertexCount, const std::array<std::uint32_t, 4>& vertexBuffer) {
-    const auto target = device.Target();
-    const std::vector<std::uint32_t> userData(vertexBuffer.begin(), vertexBuffer.end());
-    const std::array<ShaderRecompiler::MemoryRegion, 1> vertexMemory{{{reinterpret_cast<std::uintptr_t>(code.data()), std::as_bytes(code)}}};
-    ShaderRecompiler::RecompileRequest vertex{
-        {ShaderStage::Vertex, reinterpret_cast<std::uintptr_t>(code.data()), code, 0, {}},
-        {64, 8, userData, std::nullopt, std::nullopt, ShaderRecompiler::ShaderVertexStageInfo{}, vertexMemory},
-        target,
-        {0, 0, 0, AgcDriver::Graphics::PipelinePushConstantBytes},
-        ShaderRecompiler::GraphicsCompileContext{8, {}, std::nullopt, std::nullopt, {0, vertexCount, 0, 1}}
-    };
-    const auto vertexResult = ShaderRecompiler::Recompile(vertex);
-    const auto vertexPush = static_cast<std::uint32_t>(vertexResult.pushConstants.size());
-    ShaderRecompiler::ShaderPixelStageInfo pixel{};
-    pixel.interpolatorCount = 1;
-    pixel.interpolatorSettings[0] = 0x400u;
-    pixel.targetOutputMode[0] = 9;
-    pixel.targetExportMapping.fill(0xe4u);
-    const std::array<ShaderRecompiler::MemoryRegion, 1> pixelMemory{{{reinterpret_cast<std::uintptr_t>(PixelCode.data()), std::as_bytes(std::span(PixelCode))}}};
-    ShaderRecompiler::RecompileRequest fragment{
-        {ShaderStage::Fragment, reinterpret_cast<std::uintptr_t>(PixelCode.data()), PixelCode, 0, {}},
-        {64, 0, {}, std::nullopt, pixel, std::nullopt, pixelMemory},
-        target,
-        {0, 0, vertexPush, AgcDriver::Graphics::PipelinePushConstantBytes - vertexPush},
-        std::nullopt
-    };
-    const auto pixelResult = ShaderRecompiler::Recompile(fragment);
-    const std::array<AgcDriver::Graphics::CompiledShader, 2> shaders{{
-        {ShaderStage::Vertex, &vertexResult, 0},
-        {ShaderStage::Fragment, &pixelResult, vertexPush}
-    }};
-    AgcDriver::Graphics::State state{};
-    state.stages = {AgcDriver::Graphics::ShaderPath::Vertex, 0x02002000u, 64, 64, std::nullopt, std::nullopt};
-    state.color = {reinterpret_cast<std::uintptr_t>(Pixels.data()), {Width, Height}, VK_FORMAT_R8G8B8A8_UNORM, Pixels.size(), 0xe4u};
-    state.colors = {state.color};
-    state.hasColorTarget = true;
-    state.renderExtent = {Width, Height};
-    state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    state.viewport = {0, static_cast<float>(Height), static_cast<float>(Width), -static_cast<float>(Height), 0, 1};
-    state.negativeOneToOne = false;
-    state.scissor = {{0, 0}, {Width, Height}};
-    state.cullMode = VK_CULL_MODE_NONE;
-    state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    state.blend.colorWriteMask = 15;
-    state.blends = {state.blend};
-    state.blendConstants = {};
-    device.Draw(state, {0, vertexCount, 0, 1, 0, false}, shaders);
-    device.WaitIdle();
-}
-
 constexpr ShaderRecompiler::MeshConfiguration SmallSubgroup{4u, 4u, 12u, 12u, 4u, 64u, 1024u, 0u, 4u};
 constexpr ShaderRecompiler::MeshConfiguration WideSubgroup{4u, 32u, 96u, 96u, 32u, 128u, 2048u, 0u, 4u};
+constexpr ShaderRecompiler::MeshConfiguration FastLaunchSubgroup{1u, 1u, 1u, 3u, 1u, 32u, 128u, 0u, 4u};
 
 std::size_t FanPixel(float angle, float radius) {
     const auto x = static_cast<std::uint32_t>((radius * std::cos(angle) + 1.0f) * 0.5f * Width);
@@ -282,6 +252,24 @@ void CheckFan(const char* what) {
     Require(PixelIs(0, Background) && PixelIs(Pixels.size() - 4u, Background), std::string(what) + ": the corners changed");
 }
 
+std::size_t QuadPixel(std::uint32_t quad, float across) {
+    const auto x = static_cast<std::uint32_t>((static_cast<float>(quad) + across * 0.8f) * Width / Columns);
+    return (static_cast<std::size_t>(Height * 3u / 4u) * Width + x) * 4u;
+}
+
+void CheckQuads(const char* what, std::uint32_t first, std::uint32_t count) {
+    for (std::uint32_t quad = 0; quad < Columns; ++quad) {
+        const bool drawn = quad >= first && quad < first + count;
+        for (const float across : {0.25f, 0.75f}) {
+            const auto offset = QuadPixel(quad, across);
+            Require(PixelIs(offset, drawn ? TriangleColor(quad) : Background), std::string(what) + ": quad " + std::to_string(quad) + (across < 0.5f ? " left" : " right") + " half pixel " + PixelText(offset));
+        }
+        const auto gap = QuadPixel(quad, 1.12f);
+        Require(PixelIs(gap, Background), std::string(what) + ": a triangle crossed the restart after quad " + std::to_string(quad) + ", pixel " + PixelText(gap));
+    }
+    Require(PixelIs((static_cast<std::size_t>(Height / 4u) * Width + Width / 2u) * 4u, Background), std::string(what) + ": the upper half changed");
+}
+
 void CheckTriangles(const char* what) {
     for (std::uint32_t triangle = 0; triangle < Triangles; ++triangle) {
         const auto offset = CellPixel(triangle);
@@ -295,9 +283,9 @@ void CheckTriangles(const char* what) {
 int main() {
     try {
 #ifdef _WIN32
-        _putenv_s("APS5_NO_SHADER_DISK_CACHE", "1");
+        _putenv_s("ANYPS5_NO_SHADER_CACHE", "1");
 #else
-        setenv("APS5_NO_SHADER_DISK_CACHE", "1", 1);
+        setenv("ANYPS5_NO_SHADER_CACHE", "1", 1);
 #endif
         for (std::uint32_t triangle = 0; triangle < Triangles; ++triangle) {
             const auto vertices = TriangleVertices(triangle);
@@ -314,6 +302,17 @@ int main() {
             const float y = i % 2u == 0u ? -1.0f : 0.0f;
             Strip[i] = {{x, y, 0.5f, 1.0f}, stripColor};
         }
+        for (std::uint32_t strip = 0; strip < LineStrips; ++strip) {
+            const auto color = TriangleColor(strip);
+            const std::array<float, 4> rgba{color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f, 1.0f};
+            const float top = 1.0f - (static_cast<float>(LineStripRow(strip)) + 0.5f) / (Height / 2.0f);
+            const float bottom = top - 20.0f / (Height / 2.0f);
+            const float left = 24.5f / (Width / 2.0f) - 1.0f;
+            const float right = 168.5f / (Width / 2.0f) - 1.0f;
+            LineStripVertices[3 * strip] = {{left, top, 0.5f, 1.0f}, rgba};
+            LineStripVertices[3 * strip + 1] = {{right, top, 0.5f, 1.0f}, rgba};
+            LineStripVertices[3 * strip + 2] = {{right, bottom, 0.5f, 1.0f}, rgba};
+        }
         Fan[0] = {{0.0f, 0.0f, 0.5f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
         for (std::uint32_t k = 1; k <= FanRim; ++k) {
             const auto color = TriangleColor(k);
@@ -326,49 +325,34 @@ int main() {
             FanRestart[k] = FanIndices[k];
         }
         FanRestart[FanRim] = 0xffffu;
-
-        for (std::uint32_t y = 0; y <= GridRows; ++y) {
-            for (std::uint32_t x = 0; x <= GridColumns; ++x) {
-                const auto v = y * (GridColumns + 1) + x;
-                const float wobble = 0.03f * static_cast<float>((v * 7u) % 5u);
-                Grid[v] = {{-0.95f + 1.9f * static_cast<float>(x) / GridColumns + wobble, -0.95f + 1.9f * static_cast<float>(y) / GridRows - wobble, 0.5f, 1.0f}, {static_cast<float>((v * 37u) % 256u) / 255.0f, static_cast<float>((v * 101u) % 256u) / 255.0f, static_cast<float>((v * 53u + 17u) % 256u) / 255.0f, 1.0f}};
-                BigVertices[BigBase + v] = Grid[v];
+        for (std::uint32_t quad = 0; quad < Columns; ++quad) {
+            const auto color = TriangleColor(quad);
+            const std::array<float, 4> rgba{color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f, 1.0f};
+            const float left = -1.0f + 2.0f * static_cast<float>(quad) / Columns;
+            const float right = left + 1.6f / Columns;
+            Quads[4 * quad] = {{left, -1.0f, 0.5f, 1.0f}, rgba};
+            Quads[4 * quad + 1] = {{left, 0.0f, 0.5f, 1.0f}, rgba};
+            Quads[4 * quad + 2] = {{right, -1.0f, 0.5f, 1.0f}, rgba};
+            Quads[4 * quad + 3] = {{right, 0.0f, 0.5f, 1.0f}, rgba};
+            for (std::uint32_t k = 0; k < 4; ++k) {
+                QuadStrips[5 * quad + k] = static_cast<std::uint16_t>(4 * quad + k);
+                QuadStrips32[5 * quad + k] = 4 * quad + k;
             }
-        }
-        for (std::uint32_t y = 0; y < GridRows; ++y) {
-            for (std::uint32_t x = 0; x < GridColumns; ++x) {
-                const auto v = y * (GridColumns + 1) + x;
-                const auto across = (x + y) % 2u == 0u;
-                for (const auto value : across ? std::array<std::uint32_t, 6>{v, v + 1, v + GridColumns + 2, v, v + GridColumns + 2, v + GridColumns + 1} : std::array<std::uint32_t, 6>{v, v + 1, v + GridColumns + 1, v + 1, v + GridColumns + 2, v + GridColumns + 1}) GridList.push_back(value);
-            }
-        }
-        for (std::uint32_t t = 0; t < 40; ++t) {
-            const auto a = (t * 29u) % GridVertices, b = (t * 61u + 13u) % GridVertices, c = (t * 83u + 41u) % GridVertices;
-            for (const auto value : {a, b, c}) GridList.push_back(value);
-        }
-        for (const auto value : {5u, 5u, 9u, 20u, 20u, 20u, 0xffffu, 3u, 4u, 30u, 0xffffu, 0xffffu}) GridList.push_back(value);
-        for (std::uint32_t t = 0; t < 30; ++t) {
-            const auto a = (t * 47u + 3u) % GridVertices, b = (t * 11u + 70u) % GridVertices, c = (t * 97u + 5u) % GridVertices;
-            for (const auto value : {a, b, c}) GridList.push_back(value);
-        }
-        Require(GridList.size() <= GridIndices16.size(), "the grid list does not fit");
-        for (std::size_t i = 0; i < GridList.size(); ++i) {
-            GridIndices16[i] = static_cast<std::uint16_t>(GridList[i]);
-            GridIndices32[i] = GridList[i];
-            BigIndices32[i] = GridList[i] == 0xffffu ? 0xffffffffu : GridList[i] + BigBase;
-        }
-        for (std::uint32_t i = 0; i < GridStrip16.size(); ++i) {
-            const auto column = (i / 2u) % (2u * GridColumns);
-            const auto x = column <= GridColumns ? column : 2u * GridColumns - column;
-            const auto row = (i / (4u * GridColumns)) % GridRows;
-            GridStrip16[i] = static_cast<std::uint16_t>((row + i % 2u) * (GridColumns + 1) + x);
+            QuadStrips[5 * quad + 4] = 0xffffu;
+            QuadStrips32[5 * quad + 4] = 0xffffffffu;
         }
 
-        AgcDriver::VulkanDevice device;
+        const auto testDevice = OpenVulkanTestDevice();
+        if (!testDevice) return VulkanTestSkipped;
+        auto& device = *testDevice;
         const auto target = device.Target();
         if (!target.mesh.has_value()) {
-            std::puts("Mesh tests skipped: the device has no VK_EXT_mesh_shader");
-            return 0;
+            std::puts("skipped, the device has no VK_EXT_mesh_shader");
+            return VulkanTestSkipped;
+        }
+        if (device.DeviceName().starts_with("llvmpipe")) {
+            std::puts("skipped, the device has no mesh shader compiler that handles these programs (llvmpipe)");
+            return VulkanTestSkipped;
         }
 
         for (const auto& [name, subgroup] : {std::pair{"one-wave subgroups", SmallSubgroup}, std::pair{"two-wave subgroups", WideSubgroup}}) {
@@ -381,12 +365,127 @@ int main() {
             CheckTriangles((std::string("non-indexed triangle list, ") + name).c_str());
         }
 
+        auto wave32Subgroup = SmallSubgroup;
+        wave32Subgroup.threadsPerGroup = 32u;
+        for (const auto& subgroup : {wave32Subgroup, SmallSubgroup, WideSubgroup}) {
+            ClearPixels();
+            DrawMesh(device, {subgroup, {reinterpret_cast<std::uintptr_t>(Indices.data()), static_cast<std::uint32_t>(Indices.size()), 2, 1, 0, true}, VertexBufferDescriptor(Scrambled.data(), static_cast<std::uint32_t>(Scrambled.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u});
+            CheckTriangles("indexed wave32 triangle list");
+            ClearPixels();
+            DrawMesh(device, {subgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u});
+            CheckTriangles("non-indexed wave32 triangle list");
+        }
+
+        ClearPixels();
+        DrawMesh(device, {FastLaunchSubgroup, {0, Triangles, 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u, VK_CULL_MODE_NONE, FastLaunchCode, 0x482030u});
+        CheckTriangles("fast-launch subgroups");
+        ClearPixels();
+        DrawMesh(device, {FastLaunchSubgroup, {0, Triangles / 2u, 0, 1, 0, false, Triangles / 4u}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u, VK_CULL_MODE_NONE, FastLaunchCode, 0x482030u});
+        for (std::uint32_t triangle = 0; triangle < Triangles; ++triangle) {
+            const bool drawn = triangle >= Triangles / 4u && triangle < Triangles / 4u + Triangles / 2u;
+            Require(PixelIs(CellPixel(triangle), drawn ? TriangleColor(triangle) : Background), "fast-launch subgroups from a start vertex: triangle " + std::to_string(triangle) + " pixel " + PixelText(CellPixel(triangle)));
+        }
+        std::copy(Ordered.begin(), Ordered.end(), WideFastLaunch.begin() + 3u * WideFastLaunchSkipped);
+        ClearPixels();
+        DrawMesh(device, {FastLaunchSubgroup, {0, WideFastLaunchSkipped + Triangles, 0, 1, 0, false}, VertexBufferDescriptor(WideFastLaunch.data(), static_cast<std::uint32_t>(WideFastLaunch.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u, VK_CULL_MODE_NONE, FastLaunchCode, 0x482030u});
+        CheckTriangles("fast-launch draw of 65,575 one-primitive groups");
+        bool fastLaunchIndexedRefused = false;
+        try {
+            DrawMesh(device, {FastLaunchSubgroup, {reinterpret_cast<std::uintptr_t>(Indices.data()), Triangles, 2, 1, 0, true}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u, VK_CULL_MODE_NONE, FastLaunchCode, 0x482030u});
+        } catch (const std::runtime_error& error) {
+            fastLaunchIndexedRefused = std::string(error.what()).find("indexed fast-launch draws are unsupported") != std::string::npos;
+            if (!fastLaunchIndexedRefused) throw;
+        }
+        Require(fastLaunchIndexedRefused, "an indexed fast-launch draw was drawn");
+
+        for (const bool indexed : {true, false}) {
+            ClearPixels();
+            DrawMesh(device, {SmallSubgroup, {indexed ? reinterpret_cast<std::uintptr_t>(Indices.data()) : 0u, 2u, indexed ? 2u : 0u, 1, 0, indexed}, VertexBufferDescriptor(indexed ? Scrambled.data() : Ordered.data(), static_cast<std::uint32_t>(Ordered.size()))});
+            for (std::uint32_t triangle = 0; triangle < Triangles; ++triangle) {
+                Require(PixelIs(CellPixel(triangle), Background), std::string(indexed ? "indexed" : "non-indexed") + " triangle-list draw of two vertices drew triangle " + std::to_string(triangle) + ", pixel " + PixelText(CellPixel(triangle)));
+            }
+        }
+
+        ClearPixels();
+        auto pointSubgroup = SmallSubgroup;
+        pointSubgroup.outputPrimitiveSize = 1u;
+        for (const auto pointWave : {32u, 64u}) {
+            ClearPixels();
+            DrawMesh(device, {pointSubgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, pointWave});
+            for (std::uint32_t triangle = 0; triangle < Triangles; ++triangle) {
+                const auto& position = Ordered[3u * triangle].position;
+                const auto x = static_cast<std::uint32_t>((position[0] + 1.0f) * 0.5f * Width);
+                const auto y = static_cast<std::uint32_t>((1.0f - position[1]) * 0.5f * Height);
+                const auto offset = (static_cast<std::size_t>(y) * Width + x) * 4u;
+                Require(PixelIs(offset, TriangleColor(triangle)), "mesh point missing at first exported index for primitive " + std::to_string(triangle));
+                Require(PixelIs(CellPixel(triangle), Background), "mesh point output filled the interior of its packed triangle");
+            }
+        }
+
+        for (const auto pointWave : {32u, 64u}) {
+            for (const auto size : {3.0f, 4.0f}) {
+                ClearPixels();
+                MeshDraw points{pointSubgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size()))};
+                points.waveSize = pointWave;
+                points.vertex.pointSize = size;
+                DrawMesh(device, points);
+                for (std::uint32_t primitive = 0; primitive < Triangles; ++primitive) {
+                    std::uint32_t covered = 0;
+                    for (std::size_t pixel = 0; pixel < Pixels.size(); pixel += 4u) covered += PixelIs(pixel, TriangleColor(primitive));
+                    Require(covered == static_cast<std::uint32_t>(size * size), "mesh point did not cover its register-sized square");
+                }
+            }
+            for (const auto exportedSize : {6.0f, -3.0f}) {
+                ClearPixels();
+                const auto& baseCode = pointWave == 32u ? Wave32GeometryCode : GeometryCode;
+                std::array<std::uint32_t, GeometryCode.size() + 4u> sizedCode{};
+                std::copy_n(baseCode.begin(), 101u, sizedCode.begin());
+                sizedCode[92] = 0xbf88000eu;
+                sizedCode[99] = 0xf80000cfu;
+                sizedCode[101] = 0x7e6802ffu;
+                sizedCode[102] = std::bit_cast<std::uint32_t>(exportedSize);
+                sizedCode[103] = 0xf80008d1u;
+                sizedCode[104] = 0x00000034u;
+                std::copy(baseCode.begin() + 101u, baseCode.end(), sizedCode.begin() + 105u);
+                MeshDraw exported{pointSubgroup, {0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size()))};
+                exported.waveSize = pointWave;
+                exported.code = sizedCode;
+                exported.vertex.paClVsOutCntl = (1u << 16u) | (1u << 21u);
+                exported.vertex.pointSizeMin = 3.0f;
+                exported.vertex.pointSizeMax = 4.0f;
+                DrawMesh(device, exported);
+                for (std::uint32_t primitive = 0; primitive < Triangles; ++primitive) {
+                    std::uint32_t covered = 0;
+                    for (std::size_t pixel = 0; pixel < Pixels.size(); pixel += 4u) covered += PixelIs(pixel, TriangleColor(primitive));
+                    const auto side = exportedSize < 3.0f ? 3u : 4u;
+                    Require(covered == side * side, "mesh point ignored its exported size or clamp");
+                }
+            }
+        }
+
+        ClearPixels();
+        auto lineSubgroup = FastLaunchSubgroup;
+        lineSubgroup.maxPrimitives = 2u;
+        lineSubgroup.outputPrimitiveSize = 2u;
+        DrawMesh(device, {lineSubgroup, {0, LineStrips, 0, 1, 0, false}, VertexBufferDescriptor(LineStripVertices.data(), static_cast<std::uint32_t>(LineStripVertices.size())), ShaderRecompiler::MeshDrawPushOffsetBytes, false, 32u, VK_CULL_MODE_NONE, LineStripCode, 0x482030u});
+        const auto linePixel = [](std::uint32_t x, std::uint32_t y) { return (static_cast<std::size_t>(y) * Width + x) * 4u; };
+        for (std::uint32_t strip = 0; strip < LineStrips; ++strip) {
+            const auto row = LineStripRow(strip);
+            const auto color = TriangleColor(strip);
+            const auto where = "line strip " + std::to_string(strip) + ": ";
+            for (std::uint32_t x = 32; x <= 160; x += 8) Require(PixelIs(linePixel(x, row), color), where + "horizontal line pixel (" + std::to_string(x) + ", " + std::to_string(row) + ") is " + PixelText(linePixel(x, row)));
+            for (std::uint32_t y = row + 4u; y <= row + 16u; y += 4) Require(PixelIs(linePixel(168, y), color), where + "vertical line pixel (168, " + std::to_string(y) + ") is " + PixelText(linePixel(168, y)));
+            for (const auto& [x, y, what] : {std::tuple{96u, row - 3u, "above the horizontal line"}, std::tuple{96u, row + 3u, "below the horizontal line"}, std::tuple{150u, row + 5u, "inside the triangle of the strip's three vertices"}, std::tuple{96u, row + 10u, "on the edge closing the strip"}, std::tuple{96u, row + 24u, "between this strip and the next"}, std::tuple{8u, row, "left of the strip"}, std::tuple{184u, row + 10u, "right of the strip"}}) {
+                Require(PixelIs(linePixel(x, y), Background), where + "pixel (" + std::to_string(x) + ", " + std::to_string(y) + ") " + what + " is " + PixelText(linePixel(x, y)));
+            }
+        }
+        Require(PixelIs(0, Background) && PixelIs(Pixels.size() - 4u, Background), "line strips: the corners changed");
+
         constexpr std::size_t recordBlockBytes = 65536;
-        auto* record = static_cast<std::uint32_t*>(std::aligned_alloc(65536, recordBlockBytes));
-        Require(record != nullptr, "cannot allocate the indirect record block");
+        auto* record = static_cast<std::uint32_t*>(::operator new(recordBlockBytes, std::align_val_t{65536}));
         {
             GuestAllocations::Mutation mutation;
-            mutation.Add(record, recordBlockBytes, true, true);
+            mutation.Add(record, recordBlockBytes, true, true, true);
         }
         const auto drawIndirect = [&](std::uint32_t count, std::uint32_t instances, std::uint32_t first) {
             const std::array<std::uint32_t, 5> words{count, instances, first, 0u, 0u};
@@ -419,10 +518,6 @@ int main() {
         CheckTriangles("mesh program without push data");
 
         ClearPixels();
-        DrawVertexPath(device, PassthroughCode, static_cast<std::uint32_t>(Ordered.size()), VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())));
-        CheckTriangles("passthrough program gated by its subgroup counts on the vertex path");
-
-        ClearPixels();
         const ShaderRecompiler::MeshConfiguration strip{6u, 3u, 5u, 9u, 3u, 64u, 1024u, 0u, 4u};
         DrawMesh(device, {strip, {0, static_cast<std::uint32_t>(Strip.size()), 0, 1, 0, false}, VertexBufferDescriptor(Strip.data(), static_cast<std::uint32_t>(Strip.size()))});
         const std::array<std::uint8_t, 4> stripPixel{128, 255, 64, 255};
@@ -433,6 +528,21 @@ int main() {
             }
         }
         Require(PixelIs((static_cast<std::size_t>(Height / 4u) * Width + Width / 2u) * 4u, Background), "triangle strip: the upper half changed");
+
+        const auto quadBuffer = VertexBufferDescriptor(Quads.data(), static_cast<std::uint32_t>(Quads.size()));
+        ClearPixels();
+        DrawMesh(device, {strip, {reinterpret_cast<std::uintptr_t>(QuadStrips.data()), static_cast<std::uint32_t>(QuadStrips.size()), 2, 1, 0, true}, quadBuffer, ShaderRecompiler::MeshDrawPushOffsetBytes, true, 64u, VK_CULL_MODE_FRONT_BIT});
+        CheckQuads("16-bit triangle strips with restarts", 0, Columns);
+        ClearPixels();
+        DrawMesh(device, {strip, {reinterpret_cast<std::uintptr_t>(QuadStrips32.data()), static_cast<std::uint32_t>(QuadStrips32.size()), 4, 1, 0, true}, quadBuffer, ShaderRecompiler::MeshDrawPushOffsetBytes, true, 64u, VK_CULL_MODE_FRONT_BIT});
+        CheckQuads("32-bit triangle strips with restarts", 0, Columns);
+        const std::array<std::uint32_t, 5> quadWords{15u, 1u, 5u, 0u, 0u};
+        std::copy(quadWords.begin(), quadWords.end(), record);
+        AgcDriver::Pm4::DrawParameters quadDraw{reinterpret_cast<std::uintptr_t>(QuadStrips.data()), static_cast<std::uint32_t>(QuadStrips.size()), 2, 1, 0, true};
+        quadDraw.indirect = AgcDriver::Pm4::DrawParameters::IndirectDraw{reinterpret_cast<std::uintptr_t>(record), 0x25u, 20u, 20u, 1u, false, 0u, 0x280u, 0x280u, 0x280u, false, 0u};
+        ClearPixels();
+        DrawMesh(device, {strip, quadDraw, quadBuffer, ShaderRecompiler::MeshDrawPushOffsetBytes, true, 64u, VK_CULL_MODE_FRONT_BIT});
+        CheckQuads("indirect triangle strips with restarts", 1, 3);
 
         const ShaderRecompiler::MeshConfiguration fan{5u, 3u, 5u, 9u, 3u, 64u, 1024u, 0u, 4u};
         ClearPixels();
@@ -459,81 +569,6 @@ int main() {
         ClearPixels();
         DrawMesh(device, {fan, fanDraw, VertexBufferDescriptor(FanScrambled.data(), static_cast<std::uint32_t>(FanScrambled.size()))});
         CheckFan("indirect indexed triangle fan");
-
-        const auto withReuse = [](ShaderRecompiler::MeshConfiguration mesh, std::uint32_t vertices, std::uint32_t primitives) {
-            mesh.reuseVertices = vertices;
-            mesh.reusePrimitives = primitives;
-            return mesh;
-        };
-        const auto sameAsWithoutReuse = [&](const std::string& what, MeshDraw setup, std::uint32_t vertices, std::uint32_t primitives) {
-            ClearPixels();
-            DrawMesh(device, setup);
-            const auto without = Pixels;
-            Require(!std::all_of(without.begin(), without.end(), [&](std::byte value) { return value == without[0]; }), what + ": nothing was drawn");
-            setup.mesh = withReuse(setup.mesh, vertices, primitives);
-            ClearPixels();
-            DrawMesh(device, setup);
-            for (std::size_t offset = 0; offset < Pixels.size(); offset += 4) {
-                Require(std::memcmp(Pixels.data() + offset, without.data() + offset, 4) == 0, what + ": pixel " + std::to_string(offset / 4) + " is " + PixelText(offset) + " with vertex reuse");
-            }
-        };
-        const ShaderRecompiler::MeshConfiguration robots{4u, 21u, 63u, 64u, 64u, 64u, 0u, 0u, 4u, true};
-        const ShaderRecompiler::MeshConfiguration smallPassthrough{4u, 4u, 12u, 12u, 4u, 64u, 0u, 0u, 4u, true};
-        const auto gridCount = static_cast<std::uint32_t>(GridList.size());
-        const auto grid = VertexBufferDescriptor(Grid.data(), GridVertices);
-        const auto big = VertexBufferDescriptor(BigVertices.data(), static_cast<std::uint32_t>(BigVertices.size()));
-        struct Program {
-            const char* name;
-            ShaderRecompiler::MeshConfiguration mesh;
-            std::span<const std::uint32_t> code;
-            std::uint32_t vertices;
-            std::uint32_t primitives;
-        };
-        for (const auto& program : {Program{"64-vertex passthrough", robots, PassthroughCode, 64u, 64u}, Program{"12-vertex passthrough", smallPassthrough, PassthroughCode, 12u, 4u}, Program{"one-wave geometry", SmallSubgroup, GeometryCode, 12u, 4u}, Program{"two-wave geometry", WideSubgroup, GeometryCode, 96u, 32u}}) {
-            const std::string name = program.name;
-            auto setup = [&](AgcDriver::Pm4::DrawParameters draw, const std::array<std::uint32_t, 4>& vertices) {
-                MeshDraw result{program.mesh, draw, vertices};
-                result.code = program.code;
-                return result;
-            };
-            sameAsWithoutReuse(name + ", 16-bit grid", setup({reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount, 2, 1, 0, true}, grid), program.vertices, program.primitives);
-            sameAsWithoutReuse(name + ", 32-bit grid", setup({reinterpret_cast<std::uintptr_t>(GridIndices32.data()), gridCount, 4, 1, 0, true}, grid), program.vertices, program.primitives);
-            sameAsWithoutReuse(name + ", 32-bit values past 16 bits", setup({reinterpret_cast<std::uintptr_t>(BigIndices32.data()), gridCount, 4, 1, 0, true}, big), program.vertices, program.primitives);
-            auto based = setup({reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount, 2, 1, 0, true}, big);
-            based.draw.firstVertex = BigBase;
-            sameAsWithoutReuse(name + ", base vertex", based, program.vertices, program.primitives);
-            sameAsWithoutReuse(name + ", three instances", setup({reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount, 2, 3, 0, true}, grid), program.vertices, program.primitives);
-            auto restart = setup({reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount, 2, 1, 0, true}, grid);
-            restart.restart = true;
-            sameAsWithoutReuse(name + ", restart enabled", restart, program.vertices, program.primitives);
-            sameAsWithoutReuse(name + ", trailing indices", setup({reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount - 2u, 2, 1, 0, true}, grid), program.vertices, program.primitives);
-            ClearPixels();
-            DrawMesh(device, setup({reinterpret_cast<std::uintptr_t>(Indices.data()), static_cast<std::uint32_t>(Indices.size()), 2, 1, 0, true}, VertexBufferDescriptor(Scrambled.data(), static_cast<std::uint32_t>(Scrambled.size()))));
-            CheckTriangles((name + ", indexed triangle list without reuse").c_str());
-            auto scrambled = setup({reinterpret_cast<std::uintptr_t>(Indices.data()), static_cast<std::uint32_t>(Indices.size()), 2, 1, 0, true}, VertexBufferDescriptor(Scrambled.data(), static_cast<std::uint32_t>(Scrambled.size())));
-            scrambled.mesh = withReuse(scrambled.mesh, program.vertices, program.primitives);
-            ClearPixels();
-            DrawMesh(device, scrambled);
-            CheckTriangles((name + ", indexed triangle list with vertex reuse").c_str());
-            auto plain = setup({0, static_cast<std::uint32_t>(Ordered.size()), 0, 1, 0, false}, VertexBufferDescriptor(Ordered.data(), static_cast<std::uint32_t>(Ordered.size())));
-            plain.mesh = withReuse(plain.mesh, program.vertices, program.primitives);
-            ClearPixels();
-            DrawMesh(device, plain);
-            CheckTriangles((name + ", non-indexed triangle list with the reuse layout").c_str());
-        }
-        const ShaderRecompiler::MeshConfiguration passthroughStrip{6u, 62u, 64u, 64u, 64u, 64u, 0u, 0u, 4u, true};
-        MeshDraw stripDraw{passthroughStrip, {reinterpret_cast<std::uintptr_t>(GridStrip16.data()), static_cast<std::uint32_t>(GridStrip16.size()), 2, 1, 0, true}, grid};
-        stripDraw.code = PassthroughCode;
-        sameAsWithoutReuse("passthrough indexed strip", stripDraw, 64u, 64u);
-        sameAsWithoutReuse("indexed fan", {fan, {reinterpret_cast<std::uintptr_t>(FanIndices.data()), static_cast<std::uint32_t>(FanIndices.size()), 2, 1, 0, true}, VertexBufferDescriptor(FanScrambled.data(), static_cast<std::uint32_t>(FanScrambled.size()))}, 5u, 3u);
-        const std::array<std::uint32_t, 5> gridWords{gridCount, 2u, 0u, 0u, 0u};
-        std::copy(gridWords.begin(), gridWords.end(), record);
-        AgcDriver::Pm4::DrawParameters indirectGrid{reinterpret_cast<std::uintptr_t>(GridIndices16.data()), gridCount, 2, 1, 0, true};
-        indirectGrid.indirect = AgcDriver::Pm4::DrawParameters::IndirectDraw{reinterpret_cast<std::uintptr_t>(record), 0x25u, 20u, 20u, 1u, false, 0u, 0x280u, 0x280u, 0x280u, false, 0u};
-        sameAsWithoutReuse("indirect geometry grid", {WideSubgroup, indirectGrid, grid}, 96u, 32u);
-        MeshDraw indirectPassthrough{robots, indirectGrid, grid};
-        indirectPassthrough.code = PassthroughCode;
-        sameAsWithoutReuse("indirect passthrough grid", indirectPassthrough, 64u, 64u);
 
         std::puts("Mesh tests passed");
         return 0;

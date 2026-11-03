@@ -73,14 +73,18 @@ enum class IrOpcode : std::uint16_t {
     Void,
     Reference,
     ReferenceU32,
+    UnlinkedCall,
+    WindowLaneGuard,
+    DescriptorFault,
     GetUserData,
     GetShaderBase,
     ShaderClock,
     RealtimeClock,
     MeshDrawParameter,
     MeshArgument,
-    MeshTableLoad,
+    MeshRestartStart,
     MeshAllocate,
+    MeshCapturedWord,
     TessellationBase,
     GetTessellationAttribute,
     SetTessellationAttribute,
@@ -93,6 +97,8 @@ enum class IrOpcode : std::uint16_t {
     SetScalarRegister,
     GetVectorRegister,
     SetVectorRegister,
+    LoadVectorWindow,
+    StoreVectorWindow,
     GetGotoVariable,
     SetGotoVariable,
     GetScc,
@@ -141,6 +147,8 @@ enum class IrOpcode : std::uint16_t {
     CompositeExtractU32x4,
     PackHalf2x16,
     PackFloat2x16Rtz,
+    FPAdd16x2,
+    FPMul16x2,
     FPAbs32,
     FPNeg32,
     FPSaturate32,
@@ -262,6 +270,9 @@ enum class IrOpcode : std::uint16_t {
     FPRsq64,
     FPSqrt64,
     FPTrigPreop64,
+    FPDot2F32F16,
+    FPInterpolateF32,
+    FPInterpolateF16,
     ConvertF32F64,
     ConvertF64F32,
     ConvertF64S32,
@@ -291,6 +302,9 @@ enum class IrOpcode : std::uint16_t {
     StoreAddressU8,
     StoreAddressU16,
     StoreAddressU32,
+    StoreAddressU32x2,
+    StoreAddressU32x3,
+    StoreAddressU32x4,
     AddressAtomicSwap32,
     AddressAtomicCmpSwap32,
     AddressAtomicIAdd32,
@@ -304,6 +318,7 @@ enum class IrOpcode : std::uint16_t {
     AddressAtomicXor32,
     AddressAtomicInc32,
     AddressAtomicDec32,
+    AddressAtomicUSubSat32,
     AddressAtomicSwap64,
     AddressAtomicCmpSwap64,
     AddressAtomicIAdd64,
@@ -420,6 +435,8 @@ enum class IrOpcode : std::uint16_t {
     SharedAtomicMskor64,
     DataAppend,
     DataConsume,
+    DataOrderedCount,
+    DataOrderedSwap,
     SwizzleU32,
     ImageQueryDimensions,
     ImageQueryLod,
@@ -443,8 +460,22 @@ enum class IrOpcode : std::uint16_t {
     ImageAtomicFCmpSwap32,
     ImageAtomicFMin32,
     ImageAtomicFMax32,
+    ImageAtomicSwap64,
+    ImageAtomicIAdd64,
+    ImageAtomicISub64,
+    ImageAtomicUMin64,
+    ImageAtomicUMax64,
+    ImageAtomicSMin64,
+    ImageAtomicSMax64,
+    ImageAtomicAnd64,
+    ImageAtomicOr64,
+    ImageAtomicXor64,
+    ImageAtomicCmpSwap64,
     GetAttribute,
     GetInterpolationParameter,
+    GetInterpolationParameterF16,
+    InterpolateHostP1,
+    InterpolateHostP2,
     SetAttribute,
     ControlNop,
     Waitcnt,
@@ -489,6 +520,10 @@ struct PermlaneFlags {
     bool boundControl = false;
 };
 
+struct FloatConvertFlags {
+    bool nanPayloadUnused = false;
+};
+
 struct MemoryFlags {
     std::uint32_t index = 0;
     std::uint32_t pc = 0;
@@ -511,6 +546,7 @@ struct ExportFlags {
 [[nodiscard]] std::uint32_t SharedComponentCount(IrOpcode opcode);
 [[nodiscard]] AddressOpcodeInfo AddressOpcodeInfoOf(IrOpcode opcode);
 [[nodiscard]] ImageOpcodeInfo ImageOpcodeInfoOf(IrOpcode opcode);
+bool IsImageAtomic64Opcode(IrOpcode opcode);
 [[nodiscard]] std::string_view IrOpcodeName(IrOpcode opcode);
 
 }

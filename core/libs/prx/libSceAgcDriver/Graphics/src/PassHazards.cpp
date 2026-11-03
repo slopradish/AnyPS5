@@ -1,6 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/PassHazards.hpp"
 #include <algorithm>
-#include <map>
 
 namespace AgcDriver::Graphics {
 
@@ -35,15 +34,16 @@ bool PassHazards::overlapsAny(const GuestRangeSet& set, GuestRangeList ranges) c
 PassHazard PassHazards::Check(const PassAccess& access, bool samePass) const {
     const auto touchesMemory = [](const PassAccess& use) {
         const auto nonEmpty = [](GuestRangeList ranges) { return std::any_of(ranges.begin(), ranges.end(), [](const auto& range) { return range.first < range.second; }); };
-        return use.anyReads || use.anyWrites || nonEmpty(use.reads) || nonEmpty(use.writes);
+        return use.anyReads || use.anyWrites || nonEmpty(use.reads) || nonEmpty(use.writes) || nonEmpty(use.writeOnly);
     };
-    const bool earlierTouches = anyReads || anyWrites || !reads.Empty() || !writes.Empty();
+    const bool earlierTouches = anyReads || anyWrites || !reads.Empty() || !writes.Empty() || !writeOnly.Empty();
     if ((access.anyWrites && earlierTouches) || (anyWrites && touchesMemory(access))) return PassHazard::UnknownWrite;
-    const bool writesRanges = std::any_of(access.writes.begin(), access.writes.end(), [](const auto& range) { return range.first < range.second; });
-    if ((access.anyReads && !writes.Empty()) || (anyReads && writesRanges)) return PassHazard::UnknownRead;
-    if (overlapsAny(writes, access.reads)) return PassHazard::ReadAfterWrite;
-    if (overlapsAny(writes, access.writes)) return PassHazard::WriteAfterWrite;
-    if (overlapsAny(reads, access.writes)) return PassHazard::WriteAfterRead;
+    const auto nonEmpty = [](GuestRangeList ranges) { return std::any_of(ranges.begin(), ranges.end(), [](const auto& range) { return range.first < range.second; }); };
+    const bool writesRanges = nonEmpty(access.writes) || nonEmpty(access.writeOnly);
+    if ((access.anyReads && (!writes.Empty() || !writeOnly.Empty())) || (anyReads && writesRanges)) return PassHazard::UnknownRead;
+    if (overlapsAny(writes, access.reads) || overlapsAny(writeOnly, access.reads)) return PassHazard::ReadAfterWrite;
+    if (overlapsAny(writes, access.writes) || overlapsAny(writeOnly, access.writes) || overlapsAny(writes, access.writeOnly)) return PassHazard::WriteAfterWrite;
+    if (overlapsAny(reads, access.writes) || overlapsAny(reads, access.writeOnly)) return PassHazard::WriteAfterRead;
     const auto conflicts = [](bool earlier, bool later) { return earlier || later; };
     for (const auto& [image, written] : access.images) {
         if (image == VK_NULL_HANDLE) continue;
@@ -55,13 +55,13 @@ PassHazard PassHazards::Check(const PassAccess& access, bool samePass) const {
         if (std::any_of(images.begin(), images.end(), [&](const auto& seen) { return seen.first == image && conflicts(seen.second, written); })) return PassHazard::Image;
         if (std::any_of(attachments.begin(), attachments.end(), [&](const Attachment& seen) { return seen.image == image && !(samePass && seen.pass == pass) && conflicts(seen.written, written); })) return PassHazard::Image;
     }
-    if (access.gds && gds) return PassHazard::Gds;
     return PassHazard::None;
 }
 
 void PassHazards::Add(const PassAccess& access) {
     for (const auto& [begin, end] : access.reads) reads.Insert(begin, end);
     for (const auto& [begin, end] : access.writes) writes.Insert(begin, end);
+    for (const auto& [begin, end] : access.writeOnly) writeOnly.Insert(begin, end);
     for (const auto& [image, written] : access.images) {
         if (image == VK_NULL_HANDLE) continue;
         const auto it = std::find_if(images.begin(), images.end(), [&](const auto& seen) { return seen.first == image; });
@@ -76,35 +76,24 @@ void PassHazards::Add(const PassAccess& access) {
     }
     anyReads = anyReads || access.anyReads;
     anyWrites = anyWrites || access.anyWrites;
-    gds = gds || access.gds;
+}
+
+void PassHazards::SealWriteOnly() {
+    for (const auto& [begin, end] : writeOnly.Ranges()) writes.Insert(begin, end);
+    writeOnly.Clear();
 }
 
 void PassHazards::Clear() {
     reads.Clear();
     writes.Clear();
+    writeOnly.Clear();
     images.clear();
     attachments.clear();
-    anyReads = anyWrites = gds = false;
+    anyReads = anyWrites = false;
 }
 
 bool PassHazards::Empty() const {
-    return reads.Empty() && writes.Empty() && images.empty() && attachments.empty() && !anyReads && !anyWrites && !gds;
-}
-
-std::vector<std::size_t> QueuedWriteGroups(std::span<const QueuedWrite> writes) {
-    std::vector<std::size_t> ends;
-    std::map<std::uint8_t, GuestRangeSet> computed;
-    for (std::size_t i = 0; i < writes.size(); ++i) {
-        const auto& write = writes[i];
-        const bool conflict = std::any_of(computed.begin(), computed.end(), [&](const auto& kind) { return (!write.computed || kind.first != write.kind) && kind.second.Overlaps(write.begin, write.end); });
-        if (conflict) {
-            ends.push_back(i);
-            computed.clear();
-        }
-        if (write.computed) computed[write.kind].Insert(write.begin, write.end);
-    }
-    if (!writes.empty()) ends.push_back(writes.size());
-    return ends;
+    return reads.Empty() && writes.Empty() && writeOnly.Empty() && images.empty() && attachments.empty() && !anyReads && !anyWrites;
 }
 
 }

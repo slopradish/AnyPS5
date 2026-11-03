@@ -1,8 +1,10 @@
-#include <cstdio>
+#include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
 #include "prx/libSceAgc/Command/include/Packet.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -41,7 +43,7 @@ std::uint32_t available(const CommandBuffer& buffer, const char* function) {
     const auto bottom = reinterpret_cast<std::uintptr_t>(buffer.bottom);
     const auto top = reinterpret_cast<std::uintptr_t>(buffer.top);
     const auto up = reinterpret_cast<std::uintptr_t>(buffer.cursor_up);
-    const auto down = reinterpret_cast<std::uintptr_t>(buffer.cursor_down);
+    const auto down = buffer.cursor_down != nullptr ? reinterpret_cast<std::uintptr_t>(buffer.cursor_down) : top;
     Require(((bottom | top | up | down) & 3u) == 0, function, "misaligned command buffer");
     Require(bottom <= up && up <= down && down <= top, function, "invalid command buffer cursors");
     Require(bottom != 0 || top == 0, function, "null command buffer storage");
@@ -66,6 +68,7 @@ void Reserve(CommandBuffer* buffer, std::uint32_t count, const char* function) {
 std::uint32_t* Allocate(CommandBuffer* buffer, std::uint32_t count, const char* function) {
     Reserve(buffer, count, function);
     auto* result = buffer->cursor_up;
+    AgcDriverPrepareCommandWrite_nid_no_patch(reinterpret_cast<std::uint64_t>(result), static_cast<std::size_t>(count) * sizeof(std::uint32_t));
     buffer->cursor_up += count;
     return result;
 }
@@ -86,7 +89,7 @@ void ValidatePacket(const std::uint32_t* packet, std::uint32_t opcode, std::uint
 }
 
 std::uint32_t* WriteNop(CommandBuffer* buffer, std::uint32_t count, const char* function) {
-    const auto header = Header(0x10u, count);
+    const auto header = count == 1 ? 0xffff1000u : Header(0x10u, count);
     auto* packet = Allocate(buffer, count, function);
     packet[0] = header;
     std::fill_n(packet + 1, count - 1u, 0u);
@@ -97,8 +100,8 @@ std::uint32_t* WriteRegisterRange(CommandBuffer* buffer, std::uint32_t opcode, s
     Require(count != 0 && count <= 0x3fffu && offset <= 0xffffu && count <= 0x10000u - offset, function, "invalid register range");
     std::vector<std::uint32_t> snapshot;
     if (values != nullptr) {
-        CheckAddress(reinterpret_cast<std::uintptr_t>(values), 4, function);
-        snapshot.assign(values, values + count);
+        snapshot.resize(count);
+        std::memcpy(snapshot.data(), values, static_cast<std::size_t>(count) * sizeof(std::uint32_t));
     }
     auto* packet = Allocate(buffer, count + 2u, function);
     packet[0] = Header(opcode, count + 2u);
@@ -108,18 +111,27 @@ std::uint32_t* WriteRegisterRange(CommandBuffer* buffer, std::uint32_t opcode, s
 }
 
 std::uint32_t* WriteRegisters(CommandBuffer* buffer, std::uint32_t opcode, const volatile ShaderRegister* registers, std::uint32_t count, bool snapshotAll, const char* function) {
-    Require(count != 0, function, "empty register list");
-    CheckAddress(reinterpret_cast<std::uintptr_t>(registers), 4, function);
+    if (count == 0) {
+        Require(buffer != nullptr, function, "null command buffer");
+        return buffer->cursor_up;
+    }
+    CheckAddress(reinterpret_cast<std::uintptr_t>(registers), 1, function);
+    const auto* bytes = reinterpret_cast<const std::byte*>(const_cast<const ShaderRegister*>(registers));
+    const auto entryAt = [&](std::uint32_t index) {
+        ShaderRegister entry;
+        std::memcpy(&entry, bytes + static_cast<std::size_t>(index) * sizeof(ShaderRegister), sizeof(entry));
+        return entry;
+    };
     std::vector<ShaderRegister> snapshot;
     if (snapshotAll) {
         snapshot.reserve(count);
         for (std::uint32_t i = 0; i < count; ++i) {
-            snapshot.push_back({registers[i].offset, registers[i].value});
+            snapshot.push_back(entryAt(i));
             CheckBits(snapshot.back().offset, 0xffffu, function);
         }
     }
-    const auto offsetAt = [&](std::uint32_t index) { return snapshotAll ? snapshot[index].offset : registers[index].offset; };
-    const auto valueAt = [&](std::uint32_t index) { return snapshotAll ? snapshot[index].value : registers[index].value; };
+    const auto offsetAt = [&](std::uint32_t index) { return snapshotAll ? snapshot[index].offset : entryAt(index).offset; };
+    const auto valueAt = [&](std::uint32_t index) { return snapshotAll ? snapshot[index].value : entryAt(index).value; };
     std::uint32_t* first = nullptr;
     std::uint32_t index = 0;
     while (index < count) {
@@ -140,7 +152,7 @@ std::uint32_t* WriteRegisters(CommandBuffer* buffer, std::uint32_t opcode, const
 
 std::uint32_t* WriteIndirectRegisters(CommandBuffer* buffer, std::uint32_t opcode, const volatile ShaderRegister* registers, std::uint32_t count, const char* function) {
     const auto address = reinterpret_cast<std::uintptr_t>(registers);
-    CheckAddress(address, 4, function);
+    if (address != 0 || count != 0) CheckAddress(address, 4, function);
     CheckBits(count, 0x3fffu, function);
     return Emit(buffer, opcode, {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>(address >> 32u), 0x80000000u, count}, function);
 }

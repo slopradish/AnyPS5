@@ -32,13 +32,44 @@ MemoryFlags TranslationContext::addMemoryInfo(const MemoryInfo& memory, std::uin
     return MemoryFlags{index, pc};
 }
 
+bool TranslationContext::floatAtomicFlush(IrOpcode opcode) const {
+    switch (opcode) {
+    case IrOpcode::SharedAtomicFMin32:
+    case IrOpcode::SharedAtomicFMax32:
+    case IrOpcode::SharedAtomicCmpstF32:
+    case IrOpcode::SharedAtomicFAdd32:
+    case IrOpcode::BufferAtomicFMin32:
+    case IrOpcode::BufferAtomicFMax32:
+    case IrOpcode::BufferAtomicFCmpSwap32:
+    case IrOpcode::AddressAtomicFMin32:
+    case IrOpcode::AddressAtomicFMax32:
+    case IrOpcode::AddressAtomicFCmpSwap32:
+    case IrOpcode::ImageAtomicFMin32:
+    case IrOpcode::ImageAtomicFMax32:
+    case IrOpcode::ImageAtomicFCmpSwap32:
+        return !floatMode.has_value() || ((floatMode->floatMode >> 4u) & 1u) == 0u;
+    case IrOpcode::SharedAtomicFMin64:
+    case IrOpcode::SharedAtomicFMax64:
+    case IrOpcode::SharedAtomicCmpstF64:
+    case IrOpcode::BufferAtomicFMin64:
+    case IrOpcode::BufferAtomicFMax64:
+    case IrOpcode::BufferAtomicFCmpSwap64:
+    case IrOpcode::AddressAtomicFMin64:
+    case IrOpcode::AddressAtomicFMax64:
+    case IrOpcode::AddressAtomicFCmpSwap64:
+        return floatMode.has_value() && ((floatMode->floatMode >> 6u) & 1u) == 0u;
+    default:
+        return false;
+    }
+}
+
 TranslationContext::AddressOperands TranslationContext::readAddressOperands(const RdnaInstruction& inst, std::uint32_t firstSource) {
     const ResourceKind kind = flatSegmentResourceKind(inst);
     const IrU32 low = readU32(sourceAt(inst, firstSource));
     const RdnaOperand& highOrBase = sourceAt(inst, firstSource + 1u);
     if (kind == ResourceKind::Scratch) {
         IrValue& resource = ir.Emit(IrOpcode::GetScratchResource, IrOpcodeType(IrOpcode::GetScratchResource), {});
-        IrValue& offset = highOrBase.kind != RdnaOperandKind::VectorRegister ? readU32(highOrBase).Value() : low.Value();
+        IrValue& offset = ir.IAdd(low.Value(), readU32(highOrBase).Value());
         return AddressOperands{&resource, &offset, &ir.Constant(0u)};
     }
     if (kind == ResourceKind::Global && highOrBase.kind != RdnaOperandKind::VectorRegister) {
@@ -93,7 +124,7 @@ IrValue* TranslationContext::getSamplerResource(const MemoryInfo& memory) {
     return &ir.Emit(IrOpcode::GetSamplerResource, IrOpcodeType(IrOpcode::GetSamplerResource), {&dword0.Value(), &dword1.Value(), &dword2.Value(), &dword3.Value()});
 }
 
-IrValue* TranslationContext::makeImageAddress(const RdnaInstruction& inst, const RdnaOperand& base) {
+IrValue* TranslationContext::makeImageAddress(const RdnaInstruction& inst, const RdnaOperand& base, std::uint32_t fragmentOffset) {
     std::array<IrValue*, 13> components{};
     IrValue& zero = ir.Constant(0u);
     components.fill(&zero);
@@ -109,6 +140,11 @@ IrValue* TranslationContext::makeImageAddress(const RdnaInstruction& inst, const
         } else {
             components[index] = &readRawU32(offsetOperand(plainBase, index)).Value();
         }
+    }
+    if (fragmentOffset != 0u) {
+        const RdnaImageAddressComponent fragment = GetRdnaImageAddressComponentLayout(inst.imageSampleFlags, inst.imageAddressComponents - 1u);
+        IrValue*& word = components[fragment.bitOffset / 32u];
+        word = &ir.IAdd(*word, ir.Constant(fragmentOffset << (fragment.bitOffset % 32u)));
     }
     if ((inst.imageSampleFlags & RdnaImageSampleFlagCd) != 0u) {
         const auto mask = ballotMask(IrU1(ir.GetExec()));

@@ -125,7 +125,7 @@ void Fill(std::uint32_t tid, std::uint32_t* words) {
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
     const auto address = reinterpret_cast<std::uintptr_t>(data);
-    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x01016facu};
+    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x31016facu};
 }
 
 std::string Hex(std::uint32_t value) {
@@ -165,19 +165,6 @@ void Run(AgcDriver::VulkanDevice& device) {
     device.WaitIdle();
 }
 
-void CheckF32OmodRefused(AgcDriver::VulkanDevice& device) {
-    for (const std::uint32_t opcode : {0x15fu, 0x16fu}) {
-        alignas(256) const std::array<std::uint32_t, 3> code{0xd400000au | (opcode << 16u), 0x0c1a0b04u, 0xbf810000u};
-        std::string refusal;
-        try {
-            static_cast<void>(Compile(device, code));
-        } catch (const std::exception& error) {
-            refusal = error.what();
-        }
-        Require(refusal.find("VOP3 source modifiers are not implemented") != std::string::npos, "VOP3 opcode " + Hex(opcode) + " with omod was not refused");
-    }
-}
-
 void Check() {
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
         const std::uint32_t* in = &Input[tid * Inputs];
@@ -194,9 +181,12 @@ int main() {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
+        if (!TargetHasCapability(device->Target(), spv::CapabilityFloat64)) {
+            std::puts("skipped, the device has no shaderFloat64");
+            return VulkanTestSkipped;
+        }
         Run(*device);
         Check();
-        CheckF32OmodRefused(*device);
         std::puts("division result modifiers tests passed");
         return 0;
     } catch (const std::exception& error) {

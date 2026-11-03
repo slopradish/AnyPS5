@@ -2,6 +2,13 @@ name: Progress report
 
 on:
   pull_request:
+    paths:
+      - 'core/libs/prx/**'
+      - 'core/shader/recompiler/RdnaDecoder/include/RdnaDecoder/RdnaOpcode.hpp'
+      - 'tools/nid_names.py'
+      - 'tools/progress.py'
+      - 'tools/rdna_isa.txt'
+      - '.github/workflows/progress-report.yml'
 
 permissions:
   contents: read

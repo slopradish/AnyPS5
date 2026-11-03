@@ -131,6 +131,7 @@ bool IsScalarAluOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::SMulHiI32:
         case RdnaOpcode::SMulkI32:
         case RdnaOpcode::SBfeU64:
+        case RdnaOpcode::SBfeI64:
         case RdnaOpcode::SBfmB32:
         case RdnaOpcode::SBfmB64:
         case RdnaOpcode::SCselectB32:
@@ -182,9 +183,6 @@ bool IsVectorAluOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::VAndB32:
         case RdnaOpcode::VOrB32:
         case RdnaOpcode::VXorB32:
-        case RdnaOpcode::VLshlB32:
-        case RdnaOpcode::VLshrB32:
-        case RdnaOpcode::VAshrI32:
         case RdnaOpcode::VCmpEqF32:
         case RdnaOpcode::VCmpLtF32:
         case RdnaOpcode::VCmpGtF32:
@@ -622,6 +620,9 @@ bool IsVectorAluOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::VInterpP1F32:
         case RdnaOpcode::VInterpP2F32:
         case RdnaOpcode::VInterpMovF32:
+        case RdnaOpcode::VInterpP1llF16:
+        case RdnaOpcode::VInterpP1lvF16:
+        case RdnaOpcode::VInterpP2F16:
             return true;
         default:
             return false;
@@ -646,6 +647,9 @@ bool IsScalarMemoryOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::SBufferLoadDwordx4:
         case RdnaOpcode::SBufferLoadDwordx8:
         case RdnaOpcode::SBufferLoadDwordx16:
+        case RdnaOpcode::SScratchLoadDword:
+        case RdnaOpcode::SScratchLoadDwordx2:
+        case RdnaOpcode::SScratchLoadDwordx4:
             return true;
         default:
             return false;
@@ -819,6 +823,23 @@ bool IsImageOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::ImageStoreMip:
         case RdnaOpcode::ImageStorePck:
         case RdnaOpcode::ImageStoreMipPck:
+        case RdnaOpcode::ImageLoadBy2:
+        case RdnaOpcode::ImageLoadBy4:
+        case RdnaOpcode::ImageLoadMipBy2:
+        case RdnaOpcode::ImageLoadMipBy4:
+        case RdnaOpcode::ImageStoreBy2:
+        case RdnaOpcode::ImageStoreBy4:
+        case RdnaOpcode::ImageStoreMipBy2:
+        case RdnaOpcode::ImageStoreMipBy4:
+        case RdnaOpcode::ImageLoadPck2:
+        case RdnaOpcode::ImageLoadPck4:
+        case RdnaOpcode::ImageLoadMipPck2:
+        case RdnaOpcode::ImageLoadMipPck4:
+        case RdnaOpcode::ImageStorePck2:
+        case RdnaOpcode::ImageStorePck4:
+        case RdnaOpcode::ImageStoreMipPck2:
+        case RdnaOpcode::ImageStoreMipPck4:
+        case RdnaOpcode::ImageMsaaLoad:
         case RdnaOpcode::ImageAtomicSwap:
         case RdnaOpcode::ImageAtomicAdd:
         case RdnaOpcode::ImageAtomicUmin:
@@ -842,6 +863,8 @@ bool IsImageOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::ImageGather4CO:
         case RdnaOpcode::ImageGather4CLzO:
         case RdnaOpcode::ImageGather4h:
+        case RdnaOpcode::ImageGather4hPck:
+        case RdnaOpcode::ImageGather8hPck:
         case RdnaOpcode::ImageGather4:
         case RdnaOpcode::ImageGather4B:
         case RdnaOpcode::ImageGather4BCl:
@@ -875,6 +898,32 @@ bool IsExportOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::ExpPos:
         case RdnaOpcode::ExpParam:
         case RdnaOpcode::Exp:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsSigned64BitIntegerOpcode(RdnaOpcode opcode) {
+    requireClassifiableOpcode(opcode);
+    switch (opcode) {
+        case RdnaOpcode::VCmpLtI64:
+        case RdnaOpcode::VCmpEqI64:
+        case RdnaOpcode::VCmpLeI64:
+        case RdnaOpcode::VCmpGtI64:
+        case RdnaOpcode::VCmpNeI64:
+        case RdnaOpcode::VCmpGeI64:
+        case RdnaOpcode::VCmpxLtI64:
+        case RdnaOpcode::VCmpxEqI64:
+        case RdnaOpcode::VCmpxLeI64:
+        case RdnaOpcode::VCmpxGtI64:
+        case RdnaOpcode::VCmpxNeI64:
+        case RdnaOpcode::VCmpxGeI64:
+        case RdnaOpcode::VAshrrevI64:
+        case RdnaOpcode::VMadI64I32:
+        case RdnaOpcode::SAshrI64:
+        case RdnaOpcode::SBfeI64:
+        case RdnaOpcode::SFlbitI32I64:
             return true;
         default:
             return false;

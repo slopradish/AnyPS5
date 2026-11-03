@@ -49,6 +49,7 @@ ColorTarget target(ColorTileMode mode) {
     color.surfaceAddress = color.address;
     color.surfaceExtent = color.extent;
     color.cmaskAddress = reinterpret_cast<std::uintptr_t>(Cmask.data());
+    color.cmaskBytes = CmaskLayout(Width, Height).Bytes();
     return color;
 }
 
@@ -144,33 +145,46 @@ void run(AgcDriver::VulkanDevice& device, ColorTileMode mode, const std::string&
     expect(device, color, [](std::uint32_t x, std::uint32_t y) { return y < 4 ? Drawn : y >= 8 && x >= 24 ? Clear : Stale; }, name + " fast-cleared bottom edge tiles under a draw of the top rows");
 }
 
-void invalidCode(AgcDriver::VulkanDevice& device) {
+void unknownCode(AgcDriver::VulkanDevice& device) {
     const auto color = target(ColorTileMode::RenderTarget);
     prepare(color, [](std::uint32_t tileX, std::uint32_t tileY) { return tileX == 2 && tileY == 0; }, 3);
     eliminate(device, color);
-    {
-        std::lock_guard lock(AgcDriver::GuestMemory::GpuMutex());
-        device.WaitIdle();
-    }
+    expect(device, color, [](std::uint32_t, std::uint32_t) { return Stale; }, "a tile with CMASK code 3 eliminated");
     prepare(color, [](std::uint32_t, std::uint32_t) { return true; });
+    eliminate(device, color);
+    expect(device, color, [](std::uint32_t, std::uint32_t) { return Clear; }, "fast-cleared target eliminated after a CMASK code 3");
+}
+
+void expectRefused(const std::function<void()>& action, const std::string& message, const std::string& what) {
     try {
-        eliminate(device, color);
-    } catch (const std::runtime_error& error) {
-        Require(std::string(error.what()).find("not a single-sample fast-clear code") != std::string::npos, std::string("unexpected failure: ") + error.what());
+        action();
+    } catch (const std::exception& error) {
+        Require(std::string(error.what()).find(message) != std::string::npos, what + ": refused with " + error.what());
         return;
     }
-    throw std::runtime_error("a CMASK code 3 read on the GPU did not throw");
+    throw std::runtime_error(what + ": was not refused");
+}
+
+void oneFragment(AgcDriver::VulkanDevice& device) {
+    auto color = target(ColorTileMode::RenderTarget);
+    color.coverageSamples = 4;
+    prepare(color, [](std::uint32_t tileX, std::uint32_t tileY) { return tileX == 2 && tileY == 0; }, 3);
+    expectRefused([&] { eliminate(device, color); }, "CMASK code 0x3 of a one-fragment color target is not implemented", "a one-fragment target with CMASK code 3");
+    prepare(color, [](std::uint32_t, std::uint32_t) { return true; });
+    eliminate(device, color);
+    expect(device, color, [](std::uint32_t, std::uint32_t) { return Clear; }, "a fast-cleared one-fragment target eliminated");
+    prepare(color, [](std::uint32_t tileX, std::uint32_t tileY) { return tileX == 7 && tileY == 1; });
+    eliminate(device, color);
+    expect(device, color, [](std::uint32_t x, std::uint32_t y) { return x >= 56 && y >= 8 ? Clear : Stale; }, "a one-fragment target with one fast-cleared tile eliminated");
+    prepare(color, [](std::uint32_t tileX, std::uint32_t) { return tileX < 4; }, 0xc);
+    eliminate(device, color);
+    expect(device, color, [](std::uint32_t, std::uint32_t) { return Stale; }, "a one-fragment target with CMASK codes 0xc and 0xf eliminated");
 }
 
 }
 
 int main() {
     try {
-#ifdef _WIN32
-        _putenv_s("APS5_NO_SHADER_DISK_CACHE", "1");
-#else
-        setenv("APS5_NO_SHADER_DISK_CACHE", "1", 1);
-#endif
         std::unique_ptr<AgcDriver::VulkanDevice> device;
         try {
             device = std::make_unique<AgcDriver::VulkanDevice>();
@@ -181,17 +195,18 @@ int main() {
         }
         {
             GuestAllocations::Mutation mutation;
-            mutation.Add(Surface.data(), Surface.size(), true, true);
-            mutation.Add(Cmask.data(), Cmask.size(), true, true);
+            mutation.Add(SurfaceStorage.data(), SurfaceStorage.size(), true, true, true);
+            mutation.Add(Cmask.data(), Cmask.size(), true, true, true);
         }
         run(*device, ColorTileMode::Linear, "linear");
         run(*device, ColorTileMode::RenderTarget, "SW_64KB_R_X");
-        invalidCode(*device);
+        unknownCode(*device);
+        oneFragment(*device);
         device->WaitIdle();
         device.reset();
         {
             GuestAllocations::Mutation mutation;
-            mutation.Remove(Surface.data());
+            mutation.Remove(SurfaceStorage.data());
             mutation.Remove(Cmask.data());
         }
         std::cout << "CMASK fast clear draw and eliminate tests passed\n";

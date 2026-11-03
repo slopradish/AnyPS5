@@ -1,8 +1,11 @@
+#include "prx/libSceAvPlayer/include/Api.hpp"
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string_view>
 #include "SceTypes.hpp"
 #include "prx/libSceAvPlayer/include/AvPlayer.hpp"
@@ -18,6 +21,10 @@ Player* ToPlayer(AvPlayerInternal* h) {
 std::uint32_t VideoBufferCount(std::int32_t requested) {
     return static_cast<std::uint32_t>(std::clamp(requested, 2, 16));
 }
+
+constexpr std::size_t Ps5InitDataExSize = 0x230;
+constexpr std::size_t Ps5AutoStartOffset = 0x74;
+constexpr std::size_t Ps5VideoFrameBuffersOffset = 0x228;
 
 }
 
@@ -97,8 +104,14 @@ int APS5_VABI sceAvPlayerInitEx(const AvPlayerInitDataEx* init_ex, AvPlayerInter
     init.file_replacement = init_ex->file_replacement;
     init.event_replacement = init_ex->event_replacement;
     init.debug_level = init_ex->debug_level;
-    init.num_output_video_framebuffers = init_ex->num_output_video_framebuffers;
-    init.auto_start = init_ex->auto_start;
+    if (init_ex->this_size >= Ps5InitDataExSize) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(init_ex);
+        std::memcpy(&init.num_output_video_framebuffers, bytes + Ps5VideoFrameBuffersOffset, sizeof(init.num_output_video_framebuffers));
+        init.auto_start = bytes[Ps5AutoStartOffset] != 0;
+    } else {
+        init.num_output_video_framebuffers = init_ex->num_output_video_framebuffers;
+        init.auto_start = init_ex->auto_start;
+    }
     init.default_language = init_ex->default_language;
     *handle = new Player(init, VideoBufferCount(init.num_output_video_framebuffers));
     return SCE_OK;
@@ -139,7 +152,7 @@ int APS5_VABI sceAvPlayerSetAvailableBandwidth(AvPlayerInternal* h, uint32_t sta
     (void)minimum_bandwidth;
     (void)maximum_bandwidth;
     if (!h) return SCE_AVPLAYER_ERROR_INVALID_PARAMS;
-    return SCE_OK;
+    return ToPlayer(h)->SetAvailableBandwidth();
 }
 
 int APS5_VABI sceAvPlayerSetLogCallback(void* callback, void* user_data) {
@@ -163,10 +176,9 @@ int APS5_VABI sceAvPlayerStart(AvPlayerInternal* h) {
     return ToPlayer(h)->Start();
 }
 
-int APS5_VABI sceAvPlayerStartEx(AvPlayerInternal* h, const void* start_info_ex) {
-    (void)start_info_ex;
-    if (!h) return SCE_AVPLAYER_ERROR_INVALID_PARAMS;
-    return ToPlayer(h)->Start();
+int APS5_VABI sceAvPlayerStartEx(AvPlayerInternal* handle, const StartInfo* startInfo) {
+    if (handle == nullptr || startInfo == nullptr || startInfo->size != sizeof(*startInfo)) return SCE_AVPLAYER_ERROR_INVALID_PARAMS;
+    return ToPlayer(handle)->Start(startInfo->startTime);
 }
 
 int APS5_VABI sceAvPlayerStop(AvPlayerInternal* h) {
@@ -177,6 +189,37 @@ int APS5_VABI sceAvPlayerStop(AvPlayerInternal* h) {
 int APS5_VABI sceAvPlayerStreamCount(AvPlayerInternal* h) {
     if (!h) return SCE_AVPLAYER_ERROR_INVALID_PARAMS;
     return ToPlayer(h)->StreamCount();
+}
+
+}
+
+namespace AvPlayer {
+
+void SetAvPlayerClockForTest_nid_no_patch(AvPlayerInternal* h, double milliseconds) {
+    if (h) ToPlayer(h)->SetClockTimeForTest(milliseconds);
+}
+
+void HoldAvPlayerAudioEofForTest_nid_no_patch(AvPlayerInternal* h, bool hold) {
+    if (h) ToPlayer(h)->SetHoldAudioEofForTest(hold);
+}
+
+bool AvPlayerAudioEofHeldForTest_nid_no_patch(AvPlayerInternal* h) {
+    return h && ToPlayer(h)->AudioEofHeldForTest();
+}
+
+bool AvPlayerAudioEndedForTest_nid_no_patch(AvPlayerInternal* h) {
+    return h && ToPlayer(h)->AudioEndedForTest();
+}
+
+int QueuedAvPlayerAudioForTest_nid_no_patch(AvPlayerInternal* h) {
+    return h ? ToPlayer(h)->QueuedAudioForTest() : 0;
+}
+
+bool NextQueuedAvPlayerAudioTimestampForTest_nid_no_patch(AvPlayerInternal* h, std::uint64_t* timestamp) {
+    std::uint64_t value = 0;
+    if (!h || !timestamp || !ToPlayer(h)->NextQueuedAudioTimestampForTest(value)) return false;
+    *timestamp = value;
+    return true;
 }
 
 }

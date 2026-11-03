@@ -3,7 +3,10 @@
 
 #include "IntermediateRepresentation/IrProgram.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ShaderRecompiler::Detail {
@@ -22,12 +25,14 @@ private:
     };
 
     void Collect(IrValue* raw, std::uint32_t usePc);
+    void Record(IrValue* inst);
     void PatchReads();
     void MarkConditionalReads();
 
     IrProgram& _program;
     std::vector<IrValue*> _visiting;
-    std::vector<IrValue*> _visited;
+    std::unordered_map<IrValue*, std::size_t> _visitingIndex;
+    std::unordered_set<IrValue*> _visited;
     std::vector<Patch> _patches;
 };
 

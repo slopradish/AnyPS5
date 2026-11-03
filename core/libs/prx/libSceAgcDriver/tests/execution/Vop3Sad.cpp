@@ -55,7 +55,7 @@ void FillInput() {
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t count) {
     const auto address = reinterpret_cast<std::uintptr_t>(data);
-    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu) | (4u << 16u), count, 0x01016facu};
+    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu) | (4u << 16u), count, 0x11016facu};
 }
 
 std::string Hex(std::uint32_t value) {
@@ -88,19 +88,6 @@ void Run(AgcDriver::VulkanDevice& device) {
     const auto result = Compile(device, code);
     device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
     device.WaitIdle();
-}
-
-void CheckClampRefused(AgcDriver::VulkanDevice& device) {
-    for (const std::uint32_t opcode : {0x15au, 0x15bu, 0x15cu, 0x171u}) {
-        alignas(256) const std::array<std::uint32_t, 3> code{0xd400800au | (opcode << 16u), 0x041a0b04u, 0xbf810000u};
-        std::string refusal;
-        try {
-            static_cast<void>(Compile(device, code));
-        } catch (const std::exception& error) {
-            refusal = error.what();
-        }
-        Require(refusal.find("VOP3 source modifiers are not implemented") != std::string::npos, "VOP3 opcode " + Hex(opcode) + " with clamp was not refused");
-    }
 }
 
 std::uint32_t Sad(std::uint32_t lhs, std::uint32_t rhs, std::uint32_t fieldBits, bool masked) {
@@ -154,7 +141,6 @@ int main() {
         FillInput();
         Run(*device);
         Check();
-        CheckClampRefused(*device);
         std::puts("vop3 sad tests passed");
         return 0;
     } catch (const std::exception& error) {

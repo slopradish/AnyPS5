@@ -2,6 +2,7 @@
 #define DOMAIN_GUESTRUNTIME_HPP
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,9 @@ struct GuestImport {
     std::uint32_t TargetRva;
     std::uint64_t Addend;
     std::uint32_t RelocationType = 1;
+    std::string Library;
+    bool Function = false;
+    bool Weak = false;
 };
 
 struct GuestRuntime {
@@ -22,6 +26,10 @@ struct GuestRuntime {
     std::uint32_t InitRva = 0;
     std::uint32_t FiniRva = 0;
     bool UsePlatformTlsResolver = true;
+    std::vector<std::string> Names;
+    std::vector<std::string> UnmatchedImportModules;
+    std::set<std::string> ZeroReturnExports;
+    bool DeferInitialization = false;
 };
 
 }

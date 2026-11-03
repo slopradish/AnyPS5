@@ -27,13 +27,17 @@ struct TextureDetilerTestAccess {
     std::function<DetilerCapture()> lastDispatch;
     std::function<std::uint32_t()> pipelineCount;
     std::function<std::array<std::uint32_t, 3>()> lastSpecialization;
+    std::function<std::size_t()> descriptorPoolCount;
+    std::function<std::uint32_t()> descriptorPoolResets;
 };
 
 void RunTextureFormatTests();
 void RunTextureTilingTests();
 void RunStorageAliasTests();
 void RunGuestTextureResourceTests();
+void RunDepthSurfaceReuseTests();
 void RunGuestSamplerResourceTests();
+void RunLastRecordIndicesTests();
 void RunTextureDetilerTests(const AgcDriver::Graphics::Context& context, const TextureDetilerTestAccess& access);
 
 #endif

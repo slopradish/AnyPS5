@@ -1,8 +1,7 @@
 #include "SpirvBackend/SpirvFlowEmitter.hpp"
+#include "PipelineSpecialization.hpp"
 #include "SpirvBackend/SpirvBda.hpp"
 #include "SpirvBackend/SpirvEmitterInstructions.hpp"
-#include "SpirvBackend/SpirvWaveExchange.hpp"
-#include <array>
 #include "SpirvBackend/SpirvMemory/SpirvSubgroup.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -36,7 +35,13 @@ void EmitKillIfPixelValidMaskInactive(SpirvEmitterState& state) {
     const auto active = state.module.AllocateId();
     state.module.AddFunction(spv::OpLoad, TypeU32(state), maskValue, state.pixelValidMaskVariable);
     state.module.AddFunction(spv::OpINotEqual, TypeBool(state), active, maskValue, ConstantU32(state, 0u));
-    EmitKillIfBoolFalse(state, active);
+    auto keep = active;
+    if (const auto helperVariable = InputVariableForKind(state, StageInputKind::HelperInvocation); helperVariable != 0u) {
+        const auto helper = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeBool(state), helper, helperVariable);
+        keep = Binary(state, spv::OpLogicalOr, TypeBool(state), active, helper);
+    }
+    EmitKillIfBoolFalse(state, keep);
 }
 
 // Block metadata is paired with BlockOrder by position (as IrProgram validation does); terminator
@@ -81,11 +86,29 @@ void EmitReturnTerminator(SpirvValueEmitContext& ctx) {
         const auto pc = state.module.AllocateId();
         state.module.AddFunction(spv::OpLoad, TypeU32(state), pc, state.loopGuardPc);
         EmitIfCondition(state, Binary(state, spv::OpINotEqual, TypeBool(state), pc, ConstantU32(state, 0u)), [&] {
-            RecordBdaFault(state, BdaConstant(state, state.program.Resources().shaderHash), ConstantU32(state, state.loopGuardLimit), EmitBinaryU32(state, spv::OpISub, pc, ConstantU32(state, 1u)), BdaAbi::FaultReason::LoopLimit);
+            const auto hash = state.program.Resources().shaderHash;
+            RecordBdaFaultWords(state, ConstantU32(state, static_cast<std::uint32_t>(hash)), ConstantU32(state, static_cast<std::uint32_t>(hash >> 32u)), ConstantU32(state, state.loopGuardLimit), EmitBinaryU32(state, spv::OpISub, pc, ConstantU32(state, 1u)), BdaAbi::FaultReason::LoopLimit);
         });
     }
+    FlushColorTargetMerge(state);
+    if (OrderedPixelShader(state)) {
+        state.module.AddFunction(spv::OpEndInvocationInterlockEXT);
+    }
     EmitKillIfPixelValidMaskInactive(state);
-    state.module.AddFunction(spv::OpReturn);
+    if (state.quadPixelUncovered != 0u) EmitKillIfBoolFalse(state, Unary(state, spv::OpLogicalNot, TypeBool(state), state.quadPixelUncovered));
+    if (state.stencilReplay) {
+        const auto value = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeI32(state), value, state.stencilRefVariable);
+        const auto reference = Unary(state, spv::OpBitcast, TypeU32(state), value);
+        const auto masked = Binary(state, spv::OpBitwiseAnd, TypeU32(state), reference, ConstantU32(state, 0xffu));
+        const auto offset = state.module.SpecializationConstant(TypeU32(state), PipelineSpecialization::StencilReferenceOffset, state.program.Metadata().bindings.stencilReferenceDword);
+        const auto pointer = state.module.AllocateId();
+        state.module.AddFunction(spv::OpAccessChain, TypePushConstantElementPointer(state), pointer, state.pushConstantVariable, ConstantU32(state, 0u), offset);
+        const auto expected = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeU32(state), expected, pointer);
+        EmitKillIfBoolFalse(state, Binary(state, spv::OpIEqual, TypeBool(state), masked, expected));
+    }
+    EmitReturnReleasingScratch(state);
 }
 
 // The loop guard (see SpirvEmitterState::loopGuardLimit) at a branch that may leave a loop: counts the
@@ -115,39 +138,6 @@ bool IsLoopMerge(const IrProgram& program, std::uint32_t block) {
     return false;
 }
 
-// A SingleLane wave's branch on EXEC or VCC: taken as the wave's masks decide, so both halves
-// take it alike (see SpirvWaveExchange.hpp). The zero tests read "no lane has the bit", which a
-// half the workgroup does not have satisfies, instead of "every lane lacks it".
-std::uint32_t EmitSplitWaveBranchCondition(SpirvValueEmitContext& ctx, const BlockInfo& info) {
-    auto& state = ctx.state;
-    const auto kind = info.terminator.condition;
-    const bool zero = kind == BranchCondition::ExecZero || kind == BranchCondition::VccZero;
-    // The translator writes a zero test as LogicalNot(mask bit); its operand is the predicate the
-    // mask's own ballot took, which the block may have exchanged already.
-    const IrValue* predicate = info.condition->Resolve();
-    std::uint32_t bit = 0;
-    if (zero && predicate->Opcode() == IrOpcode::LogicalNot) {
-        predicate = predicate->Argument(0);
-    } else if (zero) {
-        bit = Unary(state, spv::OpLogicalNot, TypeBool(state), ctx.Def(predicate));
-    }
-    std::uint32_t ballot = 0;
-    if (bit == 0) {
-        ballot = ctx.Ballot(predicate);
-    } else {
-        const std::array<std::uint32_t, 1> words{EmitSplitBallotWord(state, bit)};
-        const auto halves = EmitWaveExchange(state, words);
-        ballot = state.module.AllocateId();
-        state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 4u), ballot, halves[0][0], halves[0][1], ConstantU32(state, 0u), ConstantU32(state, 0u));
-    }
-    const auto low = state.module.AllocateId();
-    const auto high = state.module.AllocateId();
-    state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), low, ballot, 0u);
-    state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), high, ballot, 1u);
-    const auto any = Binary(state, spv::OpINotEqual, TypeBool(state), EmitBinaryU32(state, spv::OpBitwiseOr, low, high), ConstantU32(state, 0u));
-    return zero ? Unary(state, spv::OpLogicalNot, TypeBool(state), any) : any;
-}
-
 bool IsContinueTarget(const IrProgram& program, std::uint32_t block) {
     for (const auto& info : program.Metadata().blockInfo) {
         if (info.terminator.loopHeader && info.terminator.continueBlock == block) return true;
@@ -157,7 +147,7 @@ bool IsContinueTarget(const IrProgram& program, std::uint32_t block) {
 
 std::uint32_t EmitWaveAny(SpirvEmitterState& state, std::uint32_t predicate) {
     const auto ballot = state.module.AllocateId();
-    state.module.AddFunction(spv::OpGroupNonUniformBallot, TypeU32Vector(state, 4u), ballot, ConstantU32(state, spv::ScopeSubgroup), predicate);
+    EmitSubgroupBallot(state, ballot, predicate);
     const auto wave = EmitWaveBallot(state, ballot);
     const auto low = state.module.AllocateId();
     const auto high = state.module.AllocateId();
@@ -183,9 +173,6 @@ std::uint32_t EmitWaveMaskBranchCondition(SpirvValueEmitContext& ctx, const Bloc
 
 std::uint32_t EmitBranchCondition(SpirvValueEmitContext& ctx, const BlockInfo& info) {
     const auto condition = info.terminator.condition;
-    if (ctx.state.splitWave && IsWaveMaskBranch(condition)) {
-        return EmitSplitWaveBranchCondition(ctx, info);
-    }
     if (ctx.otherHalf == nullptr && IsWaveMaskBranch(condition)) {
         return EmitWaveMaskBranchCondition(ctx, info);
     }
@@ -193,17 +180,13 @@ std::uint32_t EmitBranchCondition(SpirvValueEmitContext& ctx, const BlockInfo& i
         return ctx.Def(info.condition);
     }
     auto& state = ctx.state;
-    const auto ballot = ctx.Ballot(info.condition);
-    const auto low = state.module.AllocateId();
-    const auto high = state.module.AllocateId();
-    const auto result = state.module.AllocateId();
-    state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), low, ballot, 0u);
-    state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), high, ballot, 1u);
-    const auto kind = info.terminator.condition;
-    const bool zero = kind == BranchCondition::ExecZero || kind == BranchCondition::VccZero || kind == BranchCondition::SccZero;
-    const auto combined = EmitBinaryU32(state, zero ? spv::OpBitwiseAnd : spv::OpBitwiseOr, low, high);
-    state.module.AddFunction(zero ? spv::OpIEqual : spv::OpINotEqual, TypeBool(state), result, combined, ConstantU32(state, zero ? ~0u : 0u));
-    return result;
+    const auto own = ctx.Def(info.condition);
+    const auto other = ctx.otherHalf->Def(info.condition);
+    if (condition == BranchCondition::ExecZero || condition == BranchCondition::VccZero || condition == BranchCondition::SccZero) {
+        const auto clear = Binary(state, spv::OpLogicalOr, TypeBool(state), Unary(state, spv::OpLogicalNot, TypeBool(state), own), Unary(state, spv::OpLogicalNot, TypeBool(state), other));
+        return Unary(state, spv::OpLogicalNot, TypeBool(state), EmitWaveAny(state, clear));
+    }
+    return EmitWaveAny(state, Binary(state, spv::OpLogicalOr, TypeBool(state), own, other));
 }
 
 void EmitStructuredTerminator(SpirvValueEmitContext& ctx, const IrProgram& program, const BlockInfo& info) {
@@ -244,6 +227,11 @@ void EmitStructuredTerminator(SpirvValueEmitContext& ctx, const IrProgram& progr
                 const std::string where = resolved->Parent() == nullptr ? std::string("no block") : "block " + std::to_string(resolved->Parent()->Id());
                 const std::string message = "branch condition " + std::string(IrOpcodeName(resolved->Opcode())) + " of block " + std::to_string(info.id) + " (defined in " + where + ") was not emitted before the branch";
                 ctx.Fail(message.c_str());
+            }
+            if (ctx.Label(trueBlock) == ctx.Label(falseBlock)) {
+                if (term.loopHeader) emitMerge();
+                state.module.AddFunction(spv::OpBranch, ctx.Label(trueBlock));
+                return;
             }
             auto condition = EmitBranchCondition(ctx, info);
             if (state.loopGuardLimit != 0 && term.trueBlock != term.falseBlock) {
@@ -316,13 +304,17 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::Void: return Invoke(EmitVoid, ctx, inst);
         case IrOpcode::Reference: return Invoke(EmitReference, ctx, inst);
         case IrOpcode::ReferenceU32: return Invoke(EmitReferenceU32, ctx, inst);
+        case IrOpcode::UnlinkedCall: return Invoke(EmitUnlinkedCall, ctx, inst);
+        case IrOpcode::WindowLaneGuard: return Invoke(EmitWindowLaneGuard, ctx, inst);
+        case IrOpcode::DescriptorFault: return Invoke(EmitDescriptorFault, ctx, inst);
         case IrOpcode::GetUserData: return Invoke(EmitGetUserData, ctx, inst);
         case IrOpcode::GetShaderBase: return Invoke(EmitGetShaderBase, ctx, inst);
         case IrOpcode::ShaderClock: return Invoke(EmitShaderClock, ctx, inst);
         case IrOpcode::RealtimeClock: return Invoke(EmitRealtimeClock, ctx, inst);
         case IrOpcode::MeshDrawParameter: return Invoke(EmitMeshDrawParameter, ctx, inst);
         case IrOpcode::MeshArgument: return Invoke(EmitMeshArgument, ctx, inst);
-        case IrOpcode::MeshTableLoad: return Invoke(EmitMeshTableLoad, ctx, inst);
+        case IrOpcode::MeshRestartStart: return Invoke(EmitMeshRestartStart, ctx, inst);
+        case IrOpcode::MeshCapturedWord: return Invoke(EmitMeshCapturedWord, ctx, inst);
         case IrOpcode::MeshAllocate: return Invoke(EmitMeshAllocate, ctx, inst);
         case IrOpcode::TessellationBase: return Invoke(EmitTessellationBase, ctx, inst);
         case IrOpcode::GetTessellationAttribute: return Invoke(EmitGetTessellationAttribute, ctx, inst);
@@ -336,6 +328,8 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::SetScalarRegister: return Invoke(EmitSetScalarRegister, ctx, inst);
         case IrOpcode::GetVectorRegister: return Invoke(EmitGetVectorRegister, ctx, inst);
         case IrOpcode::SetVectorRegister: return Invoke(EmitSetVectorRegister, ctx, inst);
+        case IrOpcode::LoadVectorWindow: return Invoke(EmitLoadVectorWindow, ctx, inst);
+        case IrOpcode::StoreVectorWindow: return Invoke(EmitStoreVectorWindow, ctx, inst);
         case IrOpcode::GetGotoVariable: return Invoke(EmitGetGotoVariable, ctx, inst);
         case IrOpcode::SetGotoVariable: return Invoke(EmitSetGotoVariable, ctx, inst);
         case IrOpcode::GetScc: return Invoke(EmitGetScc, ctx, inst);
@@ -382,8 +376,10 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::CompositeExtractU32x2: return Invoke(EmitCompositeExtractU32x2, ctx, inst);
         case IrOpcode::CompositeExtractU32x3: return Invoke(EmitCompositeExtractU32x3, ctx, inst);
         case IrOpcode::CompositeExtractU32x4: return Invoke(EmitCompositeExtractU32x4, ctx, inst);
-        case IrOpcode::PackHalf2x16: return Invoke(EmitPackHalf2x16, ctx, inst);
+        case IrOpcode::PackHalf2x16: return Invoke(EmitPackHalf2x16Value, ctx, inst);
         case IrOpcode::PackFloat2x16Rtz: return Invoke(EmitPackFloat2x16Rtz, ctx, inst);
+        case IrOpcode::FPAdd16x2: return Invoke(EmitFPAdd16x2, ctx, inst);
+        case IrOpcode::FPMul16x2: return Invoke(EmitFPMul16x2, ctx, inst);
         case IrOpcode::FPAbs32: return Invoke(EmitFPAbs32, ctx, inst);
         case IrOpcode::FPNeg32: return Invoke(EmitFPNeg32, ctx, inst);
         case IrOpcode::FPSaturate32: return Invoke(EmitFPSaturate32, ctx, inst);
@@ -505,6 +501,9 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::FPRsq64: return Invoke(EmitFPRsq64, ctx, inst);
         case IrOpcode::FPSqrt64: return Invoke(EmitFPSqrt64, ctx, inst);
         case IrOpcode::FPTrigPreop64: return Invoke(EmitFPTrigPreop64, ctx, inst);
+        case IrOpcode::FPDot2F32F16: return Invoke(EmitFPDot2F32F16, ctx, inst);
+        case IrOpcode::FPInterpolateF32: return Invoke(EmitFPInterpolateF32, ctx, inst);
+        case IrOpcode::FPInterpolateF16: return Invoke(EmitFPInterpolateF16, ctx, inst);
         case IrOpcode::ConvertF32F64: return Invoke(EmitConvertF32F64, ctx, inst);
         case IrOpcode::ConvertF64F32: return Invoke(EmitConvertF64F32, ctx, inst);
         case IrOpcode::ConvertF64S32: return Invoke(EmitConvertF64S32, ctx, inst);
@@ -534,6 +533,9 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::StoreAddressU8: return Invoke(EmitStoreAddressU8, ctx, inst);
         case IrOpcode::StoreAddressU16: return Invoke(EmitStoreAddressU16, ctx, inst);
         case IrOpcode::StoreAddressU32: return Invoke(EmitStoreAddressU32, ctx, inst);
+        case IrOpcode::StoreAddressU32x2: return Invoke(EmitStoreAddressU32x2, ctx, inst);
+        case IrOpcode::StoreAddressU32x3: return Invoke(EmitStoreAddressU32x3, ctx, inst);
+        case IrOpcode::StoreAddressU32x4: return Invoke(EmitStoreAddressU32x4, ctx, inst);
         case IrOpcode::AddressAtomicSwap32: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicCmpSwap32: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicIAdd32: return Invoke(EmitAddressAtomic, ctx, inst);
@@ -547,6 +549,7 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::AddressAtomicXor32: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicInc32: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicDec32: return Invoke(EmitAddressAtomic, ctx, inst);
+        case IrOpcode::AddressAtomicUSubSat32: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicSwap64: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicCmpSwap64: return Invoke(EmitAddressAtomic, ctx, inst);
         case IrOpcode::AddressAtomicIAdd64: return Invoke(EmitAddressAtomic, ctx, inst);
@@ -663,6 +666,8 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::SharedAtomicMskor64: return Invoke(EmitSharedAtomicMskor64, ctx, inst);
         case IrOpcode::DataAppend: return Invoke(EmitDataAppend, ctx, inst);
         case IrOpcode::DataConsume: return Invoke(EmitDataConsume, ctx, inst);
+        case IrOpcode::DataOrderedCount: return Invoke(EmitDataOrderedCount, ctx, inst);
+        case IrOpcode::DataOrderedSwap: return Invoke(EmitDataOrderedSwap, ctx, inst);
         case IrOpcode::SwizzleU32: return Invoke(EmitSwizzleU32, ctx, inst);
         case IrOpcode::ImageQueryDimensions: return Invoke(EmitImageQueryDimensions, ctx, inst);
         case IrOpcode::ImageQueryLod: return Invoke(EmitImageQueryLod, ctx, inst);
@@ -687,8 +692,20 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::ImageAtomicFCmpSwap32: return Invoke(EmitImageAtomicFCmpSwap32, ctx, inst);
         case IrOpcode::ImageAtomicFMin32: return Invoke(EmitImageAtomicFMin32, ctx, inst);
         case IrOpcode::ImageAtomicFMax32: return Invoke(EmitImageAtomicFMax32, ctx, inst);
+        case IrOpcode::ImageAtomicSwap64: return Invoke(EmitImageAtomicSwap64, ctx, inst);
+        case IrOpcode::ImageAtomicIAdd64: return Invoke(EmitImageAtomicIAdd64, ctx, inst);
+        case IrOpcode::ImageAtomicISub64: return Invoke(EmitImageAtomicISub64, ctx, inst);
+        case IrOpcode::ImageAtomicUMin64: return Invoke(EmitImageAtomicUMin64, ctx, inst);
+        case IrOpcode::ImageAtomicUMax64: return Invoke(EmitImageAtomicUMax64, ctx, inst);
+        case IrOpcode::ImageAtomicSMin64: return Invoke(EmitImageAtomicSMin64, ctx, inst);
+        case IrOpcode::ImageAtomicSMax64: return Invoke(EmitImageAtomicSMax64, ctx, inst);
+        case IrOpcode::ImageAtomicAnd64: return Invoke(EmitImageAtomicAnd64, ctx, inst);
+        case IrOpcode::ImageAtomicOr64: return Invoke(EmitImageAtomicOr64, ctx, inst);
+        case IrOpcode::ImageAtomicXor64: return Invoke(EmitImageAtomicXor64, ctx, inst);
+        case IrOpcode::ImageAtomicCmpSwap64: return Invoke(EmitImageAtomicCmpSwap64, ctx, inst);
         case IrOpcode::GetAttribute: return Invoke(EmitGetAttribute, ctx, inst);
         case IrOpcode::GetInterpolationParameter: return Invoke(EmitGetInterpolationParameter, ctx, inst);
+        case IrOpcode::GetInterpolationParameterF16: return Invoke(EmitGetInterpolationParameterF16, ctx, inst);
         case IrOpcode::SetAttribute: return Invoke(EmitSetAttribute, ctx, inst);
         case IrOpcode::ControlNop: return Invoke(EmitControlNop, ctx, inst);
         case IrOpcode::Waitcnt: return Invoke(EmitWaitcnt, ctx, inst);
@@ -721,7 +738,6 @@ void EmitStructuredInstruction(SpirvValueEmitContext& ctx, StructuredFunctionSta
 void EmitStructuredBlock(SpirvValueEmitContext& ctx, StructuredFunctionState& functionState, const IrBlock* block) {
     auto& state = ctx.state;
     state.currentBlock = block;
-    ctx.blockWaveBallots.clear();
     EmitLabel(state, ctx.Label(block));
     bool emittedNonPhi = false;
     // Wave LDS ordering (see WaveLdsScope): a barrier separates an LDS write from the next LDS access
@@ -744,8 +760,9 @@ void EmitStructuredBlock(SpirvValueEmitContext& ctx, StructuredFunctionState& fu
             } else if (access != SharedAccess::None) {
                 const bool writes = access != SharedAccess::Read;
                 if (ldsWritten || (writes && ldsRead)) {
-                    if (state.splitWave) EmitWaveSync(state);
-                    else state.module.AddFunction(spv::OpControlBarrier, ConstantU32(state, state.waveLdsScope), ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsAcquireReleaseMask | spv::MemorySemanticsWorkgroupMemoryMask));
+                    const auto semantics = ConstantU32(state, spv::MemorySemanticsAcquireReleaseMask | LdsMemorySemantics(state));
+                    if (state.waveLdsMemoryBarriers && state.waveLdsScope == spv::ScopeSubgroup) state.module.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeSubgroup), semantics);
+                    else state.module.AddFunction(spv::OpControlBarrier, ConstantU32(state, state.waveLdsScope), ConstantU32(state, spv::ScopeWorkgroup), semantics);
                     ldsWritten = false;
                     ldsRead = false;
                 }
@@ -788,6 +805,32 @@ void PatchStructuredPhis(SpirvValueEmitContext& ctx, StructuredFunctionState& fu
     }
 }
 
+bool CommunicatesThroughMemory(IrOpcode opcode) {
+    const auto buffer = BufferAccessOf(opcode);
+    const auto address = AddressOpcodeInfoOf(opcode).access;
+    const auto image = ImageOpcodeInfoOf(opcode).access;
+    return SharedAccessOf(opcode) != SharedAccess::None || buffer == BufferAccess::Write || buffer == BufferAccess::Atomic || address == AddressAccess::Write || address == AddressAccess::Atomic || image == ImageAccess::Write || image == ImageAccess::Atomic;
+}
+
+bool AccessesMemory(IrOpcode opcode) {
+    return opcode == IrOpcode::ReadConst || opcode == IrOpcode::ReadConstBuffer || SharedAccessOf(opcode) != SharedAccess::None || BufferAccessOf(opcode) != BufferAccess::None || AddressOpcodeInfoOf(opcode).access != AddressAccess::None || ImageOpcodeInfoOf(opcode).access != ImageAccess::None;
+}
+
+bool PrecedesEveryMemoryAccess(const IrProgram& program, const IrValue& barrier) {
+    const auto& blocks = program.BlockOrder();
+    const IrBlock* block = blocks.empty() ? nullptr : blocks.front();
+    for (std::size_t steps = 0; block != nullptr && steps < blocks.size(); ++steps) {
+        for (const auto* instruction : block->Instructions()) {
+            if (instruction == &barrier) return true;
+            if (AccessesMemory(instruction->Opcode())) return false;
+        }
+        if (block->Successors().size() != 1u) return false;
+        block = block->Successors().front();
+        if (block->Predecessors().size() != 1u) return false;
+    }
+    return false;
+}
+
 }
 
 void EmitControlFlow(SpirvModule& module, const IrProgram& program) {
@@ -822,18 +865,19 @@ void EmitControlFlow(SpirvValueEmitContext& context, StructuredFunctionState& fu
         if (block == nullptr) {
             context.Fail("structured control flow contains a null block");
         }
+        state.bufferLengths.clear();
         const BlockInfo* info = BlockInfoFor(program, block);
         if (info == nullptr) {
             context.Fail("structured control flow block has no terminator metadata");
         }
         const bool stops = state.bdaStopsInvocations;
-        state.bdaStopsInvocations = stops && !IsContinueTarget(program, info->id);
+        state.continueTarget = IsContinueTarget(program, info->id);
+        state.bdaStopsInvocations = stops && !state.continueTarget;
         EmitStructuredBlock(context, functionState, block);
-        EmitStructuredTerminator(context, program, *info);
-        // The label the block branches from (the terminator's condition may open blocks of its own,
-        // a SingleLane wave's pairing loop).
         functionState.blockExitLabels.emplace(block, state.currentLabel);
+        EmitStructuredTerminator(context, program, *info);
         state.bdaStopsInvocations = stops;
+        state.continueTarget = false;
     }
     PatchStructuredPhis(context, functionState);
 }
@@ -841,10 +885,20 @@ void EmitControlFlow(SpirvValueEmitContext& context, StructuredFunctionState& fu
 void EmitVoid(SpirvValueEmitContext&) {
 }
 
-void EmitBarrier(SpirvEmitterState& state) {
+void EmitBarrier(SpirvValueEmitContext& ctx, const IrValue& inst) {
+    auto& state = ctx.state;
+    if (state.program.Resources().stage == IrShaderStage::Vertex) {
+        if (PrecedesEveryMemoryAccess(state.program, inst)) return;
+        for (const auto* block : state.program.BlockOrder()) {
+            for (const auto* instruction : block->Instructions()) {
+                if (CommunicatesThroughMemory(instruction->Opcode())) ctx.Fail(inst, "s_barrier in a vertex program that accesses LDS or GDS or writes memory is not implemented");
+            }
+        }
+        return;
+    }
     const bool tessellation = state.program.Resources().stage == IrShaderStage::TessellationControl;
     const auto memoryScope = tessellation ? spv::ScopeInvocation : spv::ScopeWorkgroup;
-    const auto semantics = tessellation ? spv::MemorySemanticsMaskNone : spv::MemorySemanticsAcquireReleaseMask | spv::MemorySemanticsWorkgroupMemoryMask;
+    const std::uint32_t semantics = tessellation ? static_cast<std::uint32_t>(spv::MemorySemanticsMaskNone) : spv::MemorySemanticsAcquireReleaseMask | LdsMemorySemantics(state);
     state.module.AddFunction(spv::OpControlBarrier, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, memoryScope), ConstantU32(state, semantics));
 }
 
@@ -858,6 +912,28 @@ void EmitReference(SpirvValueEmitContext& context) {
 
 void EmitReferenceU32(SpirvValueEmitContext& context) {
     EmitVoid(context);
+}
+
+void EmitUnlinkedCall(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t low, std::uint32_t high, std::uint32_t programCounter) {
+    auto& state = ctx.state;
+    if (state.faultBufferVariable == 0) ctx.Fail(inst, "calls an unlinked target without a fault buffer");
+    RecordBdaFaultWords(state, low, high, ConstantU32(state, 0u), programCounter, BdaAbi::FaultReason::UnlinkedCall);
+    StopBdaInvocationIf(state, ConstantBool(state, true));
+}
+
+void EmitWindowLaneGuard(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t index, std::uint32_t value, std::uint32_t current, std::uint32_t slot, std::uint32_t lane) {
+    auto& state = ctx.state;
+    if (state.faultBufferVariable == 0) ctx.Fail(inst, "checks a spilled lane without a fault buffer");
+    const auto boolean = TypeBool(state);
+    const auto ownLane = Binary(state, spv::OpIEqual, boolean, EmitSubgroupLocalInvocationId(state), Binary(state, spv::OpBitwiseAnd, TypeU32(state), lane, ConstantU32(state, state.program.WaveSize() - 1u)));
+    const auto overwritten = Binary(state, spv::OpLogicalAnd, boolean, Binary(state, spv::OpIEqual, boolean, index, slot), Binary(state, spv::OpINotEqual, boolean, value, current));
+    EmitIfCondition(state, Binary(state, spv::OpLogicalAnd, boolean, ownLane, overwritten), [&] { RecordBdaFaultWords(state, slot, lane, value, ConstantU32(state, 0u), BdaAbi::FaultReason::WindowLaneSpill); });
+}
+
+void EmitDescriptorFault(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t condition, std::uint32_t low, std::uint32_t high, std::uint32_t programCounter) {
+    auto& state = ctx.state;
+    if (state.faultBufferVariable == 0) ctx.Fail(inst, "reports an invalid descriptor without a fault buffer");
+    EmitIfCondition(state, condition, [&] { RecordBdaFaultWords(state, low, high, ConstantU32(state, 0u), programCounter, BdaAbi::FaultReason::InvalidDescriptor); });
 }
 
 void EmitControlNop(SpirvValueEmitContext& context) {

@@ -5,9 +5,10 @@
 #include "RdnaDecoder/RdnaProgram.hpp"
 #include "IntermediateRepresentation/IrBuilder.hpp"
 #include "IntermediateRepresentation/IrProgram.hpp"
-#include "Translation/EmbeddedVertexFetch.hpp"
 #include "Optimization/ShaderStageInputInfo.hpp"
+#include "Translation/EmbeddedVertexFetch.hpp"
 #include <cstdint>
+#include <optional>
 
 namespace ShaderRecompiler {
 
@@ -29,8 +30,17 @@ struct TranslateOptions {
     std::uint32_t userDataBaseRegister = 0;
     std::uint32_t userDataCount = 64;
     std::uint32_t scratchDwords = 0;
+    std::uint32_t sharedMemoryBytes = 0;
     std::uint64_t shaderHash = 0;
     bool fragmentShaderBarycentricEnabled = false;
+    bool interpolationFunctions = false;
+    bool nativeFloat16 = false;
+    bool float32FlushToZero = false;
+    bool float32FlushDeclared = false;
+    bool float32DenormPreserve = false;
+    bool float64 = false;
+    bool gcnLegacyVertexInputs = false;
+    std::optional<ShaderFloatMode> floatMode;
     ShaderStageInputInfo inputInfo;
     const EmbeddedFetchPlan* embeddedFetch = nullptr;
     bool subgroupContextMarkers = false;

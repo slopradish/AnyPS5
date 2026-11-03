@@ -12,6 +12,14 @@
 
 namespace AgcDriver::Pm4 {
 
+constexpr std::size_t GdsBytes = 0x10000;
+std::uint64_t GdsAddress();
+void RequestImportableGds(bool requested);
+bool ImportableGdsRequested();
+bool GdsShared();
+bool GdsImportable();
+void RejectGdsImport();
+
 struct DrawParameters {
     std::uint64_t indexAddress;
     std::uint32_t indexCount;
@@ -43,6 +51,7 @@ struct DrawParameters {
         std::uint32_t drawIndexLocation;
         bool drawIndexEnabled;
         std::uint32_t indxOffset;
+        bool indexLimitKnown = true;
         enum class Rule : std::uint8_t { InPlace, Constant };
         Rule vertexRule = Rule::Constant;
         Rule instanceRule = Rule::Constant;
@@ -75,38 +84,26 @@ std::uint32_t ReadDrawCount(const DrawParameters::IndirectDraw& indirect);
 inline bool IndirectDrawOpcode(std::uint32_t opcode) { return opcode == 0x24 || opcode == 0x25 || opcode == 0x2c || opcode == 0x38; }
 inline bool DrawOpcode(std::uint32_t opcode) { return opcode == 0x27 || opcode == 0x2d || opcode == 0x35 || IndirectDrawOpcode(opcode); }
 
-// The 64 KiB global data share the CP's DMA_DATA reads and writes and shaders reach through their
-// GDS binding. It lives in the driver's storage until a device installs a backing (the mapping of
-// its GDS buffer, which draws and dispatches bind): the current bytes are copied into the backing,
-// and the CP reads and writes the backing from then on. ReleaseGdsBacking copies the bytes back (the
-// owner's device must be idle); only the owner that installed the backing releases it, and a second
-// backing is refused (false). A CP access to the GDS comes after the device drained (Execute of a
-// DMA_DATA follows the drain); ResolveStore, which reads its source before the store is recorded,
-// declines a GDS source while shaders used the GDS since the CP's last access (NoteGdsShaderUse), so
-// the packet drains first.
-inline constexpr std::size_t GdsBytes = 0x10000;
-bool InstallGdsBacking(const void* owner, std::span<std::byte, GdsBytes> backing);
-void ReleaseGdsBacking(const void* owner);
-void NoteGdsShaderUse();
-
+std::string_view KnownName(std::uint32_t header);
 std::string Name(std::uint32_t header);
 // A PM4 type-2 packet is a one-dword filler (command-buffer padding); type 3 and type 0 carry a
 // dword count in bits 29:16. Type 1 is undefined.
-inline bool FillerPacket(std::uint32_t header) { return (header >> 30u) == 2u; }
+inline bool FillerPacket(std::uint32_t header) { return (header >> 30u) == 2u || header == 0xffff1000u; }
 inline std::size_t PacketWords(std::uint32_t header) { return FillerPacket(header) ? 1u : static_cast<std::size_t>((header >> 16u) & 0x3fffu) + 2u; }
 std::string_view UnsupportedReason(std::uint32_t header);
 void Validate(std::span<const std::uint32_t> packet, std::uint32_t queue);
 void Execute(std::span<const std::uint32_t> packet, QueueState& queue);
-inline bool RegisterLoadOpcode(std::uint32_t opcode) { return opcode == 0x63 || opcode == 0x64 || opcode == 0x9f; }
-std::vector<std::uint32_t> ReadRegisterPairs(std::span<const std::uint32_t> packet);
-void ApplyRegisterPairs(std::span<const std::uint32_t> packet, QueueState& queue, std::span<const std::uint32_t> pairs);
-enum class StateEffect : std::uint8_t { None, Registers, Loads, Unknown };
-StateEffect PacketStateEffect(std::uint32_t header);
+inline bool IndirectRegisterOpcode(std::uint32_t opcode) { return opcode == 0x63 || opcode == 0x64 || opcode == 0x9f; }
+std::vector<std::uint32_t> ReadIndirectRegisters(std::span<const std::uint32_t> packet);
+bool IndirectRegistersValid(std::span<const std::uint32_t> pairs);
+void ExecuteIndirectRegisters(std::span<const std::uint32_t> packet, std::span<const std::uint32_t> pairs, QueueState& queue, bool skipInvalid = false);
 bool AccessesMemory(std::uint32_t header);
 // Whether an ACQUIRE_MEM packet asks only for GPU cache actions (no CPU-visible memory
 // synchronization): such a packet needs a pipeline barrier, not a device drain.
 bool UsesGpuCacheBarrier(std::span<const std::uint32_t> packet);
 bool IsTagMarker(std::span<const std::uint32_t> packet);
+inline bool Predicated(std::uint32_t header) { return !FillerPacket(header) && (header & 1u) != 0; }
+bool PredicationPasses(const QueueState& queue);
 bool WaitSatisfied(std::span<const std::uint32_t> packet);
 // WaitSatisfied for a polling loop: the caller has validated the address once, so the value is read
 // directly instead of through the checked guest memory path.
@@ -115,6 +112,8 @@ bool WaitSatisfiedUnchecked(std::span<const std::uint32_t> packet);
 // holds will store), without reading memory.
 bool WaitComparesValue(std::span<const std::uint32_t> packet, std::uint64_t value);
 std::size_t WaitAwaitedBytes(std::span<const std::uint32_t> packet);
+std::size_t ConditionalWords(std::span<const std::uint32_t> packet);
+std::uint32_t ReadCondition(std::span<const std::uint32_t> packet);
 // A label write (RELEASE_MEM with a data select, WRITE_DATA to memory): the destination and the
 // bytes it stores, so the write can be recorded on the GPU behind the work it signals. Packets
 // without a memory destination decode to nothing. No allocation per label (tens of thousands per
@@ -128,18 +127,6 @@ struct LabelWrite {
     std::span<const std::byte> Bytes() const { return inlineSize != 0 ? std::span<const std::byte>(inlineBytes).first(inlineSize) : packetBytes; }
 };
 std::optional<LabelWrite> DecodeLabelWrite(std::span<const std::uint32_t> packet);
-std::uint32_t ParseGpuTimestampScale(const char* value);
-std::uint64_t ScaleGpuClockNs(std::uint64_t nowNs, std::uint64_t originNs, std::uint32_t percent);
-std::uint64_t GpuTimestamp();
-bool ExactGpuTimestamps();
-enum class TimestampStage : std::uint8_t { EndOfPipe, ComputeShaders, PixelShaders };
-struct TimestampWrite {
-    std::uint64_t address;
-    std::size_t bytes;
-    TimestampStage stage;
-};
-TimestampStage DecodeTimestampStage(std::uint32_t eventWord);
-std::optional<TimestampWrite> DecodeTimestampWrite(std::span<const std::uint32_t> packet);
 // A memory store the CPU can resolve before the GPU runs it (COPY_DATA and DMA_DATA to memory,
 // DUMP_CONST_RAM): the destination and the bytes it stores, so the driver can record the store on
 // the GPU like a label instead of draining the device and storing on the CPU. Immediate and constant
@@ -155,31 +142,70 @@ struct StoreWrite {
     std::span<const std::byte> Bytes() const { return ownedBytes.empty() ? viewBytes : std::span<const std::byte>(ownedBytes); }
 };
 std::optional<StoreWrite> ResolveStore(std::span<const std::uint32_t> packet, const QueueState& queue, std::size_t limit);
-struct GdsTransfer {
-    enum class Kind : std::uint8_t { FillGds, MemoryToGds, GdsToMemory };
-    Kind kind;
-    std::uint64_t gdsOffset;
-    std::uint64_t memory;
-    std::uint32_t value;
-    std::size_t bytes;
-};
-std::optional<GdsTransfer> DecodeGdsTransfer(std::span<const std::uint32_t> packet);
-// A DMA_DATA that copies guest memory to guest memory (both addresses incrementing, no GDS, no
-// immediate, no register): its ranges, for the driver to record the copy on the GPU in queue
-// order (VulkanDevice::CopyBuffer) instead of draining the device and copying on the CPU. Nothing
-// for any other packet, an empty copy or overlapping ranges.
 struct MemoryCopy {
     std::uint64_t source;
     std::uint64_t destination;
     std::size_t bytes;
 };
 std::optional<MemoryCopy> DecodeMemoryCopy(std::span<const std::uint32_t> packet);
+std::uint32_t DmaSource(std::span<const std::uint32_t> packet);
+std::uint32_t DmaDestination(std::span<const std::uint32_t> packet);
+inline constexpr std::uint32_t DmaSelectGds = 1;
+inline constexpr std::uint32_t DmaSourceData = 2;
+inline constexpr std::uint32_t DmaDestinationNowhere = 2;
+inline std::size_t DmaBytes(std::span<const std::uint32_t> packet) { return packet[6] & 0x3ffffffu; }
+inline constexpr std::uint32_t CopyDataGpuClockSource = 18;
+inline std::uint32_t CopyDataSource(std::span<const std::uint32_t> packet) { return ((packet[1] & 0xfu) << 1u) | ((packet[1] >> 30u) & 1u); }
+inline bool CopyDataImmediate(std::uint32_t source) { return source >= 10 && source != CopyDataGpuClockSource; }
+inline bool CopyDataToRegister(std::span<const std::uint32_t> packet) { return ((packet[1] >> 8u) & 0xfu) == 0; }
+inline std::size_t CopyDataBytes(std::span<const std::uint32_t> packet) { return (packet[1] & 0x10000u) != 0 ? 8 : 4; }
+inline constexpr std::uint32_t RewindValid = 0x80000000u;
+inline constexpr std::uint32_t RewindOffloadEnable = 0x01000000u;
+struct WaitFields {
+    std::uint32_t function;
+    std::uint64_t address;
+    std::uint64_t reference;
+    std::uint64_t mask;
+    std::uint32_t poll;
+    std::size_t bytes;
+};
+WaitFields DecodeWait(std::span<const std::uint32_t> packet);
+struct ConditionalWrite {
+    std::uint64_t compared;
+    std::uint64_t destination;
+    std::uint32_t value;
+};
+ConditionalWrite DecodeConditionalWrite(std::span<const std::uint32_t> packet);
+struct ConstantRamDump {
+    std::uint32_t offset;
+    std::uint32_t words;
+    std::uint64_t destination;
+};
+ConstantRamDump DecodeConstantRamDump(std::span<const std::uint32_t> packet);
+inline constexpr std::uint32_t SampleDumpEvent = 0x39;
+inline constexpr std::uint64_t SampleDumpBlocks = 16;
+inline constexpr std::uint64_t SampleDumpStride = 16;
+inline constexpr std::uint64_t SampleDumpBlockBytes = 8;
+inline constexpr std::uint64_t SampleDumpBytes = (SampleDumpBlocks - 1) * SampleDumpStride + SampleDumpBlockBytes;
+inline bool SampleDump(std::span<const std::uint32_t> packet) { return ((packet[0] >> 8u) & 0xffu) == 0x46u && packet.size() >= 2 && (packet[1] & 0x3fu) == SampleDumpEvent; }
+inline std::uint64_t SampleDumpAddress(std::span<const std::uint32_t> packet) { return packet[2] | (static_cast<std::uint64_t>(packet[3]) << 32u); }
+struct PacketStore {
+    enum class Value : std::uint8_t { Bytes, Pattern, RunTime };
+    std::uint64_t address = 0;
+    std::uint64_t bytes = 0;
+    Value value = Value::RunTime;
+    std::vector<std::byte> data;
+    bool conditional = false;
+};
+std::vector<PacketStore> DecodeStores(std::span<const std::uint32_t> packet);
 // A DISPATCH_INDIRECT's arguments: the guest address of its three group-count dwords (no memory
 // access, so the GPU can read them in place: VulkanDevice::DispatchIndirect), the DISPATCH_DIRECT
 // packet made by reading them there (through the checked guest memory path, which waits for
 // recorded GPU work that writes them), and both steps in one for the packet.
 std::uint64_t DispatchArgumentAddress(std::span<const std::uint32_t> packet, const QueueState& queue);
+void NoteDispatchRegisters(std::span<const std::uint32_t> packet, QueueState& queue);
 std::array<std::uint32_t, 5> ReadDispatchArguments(std::uint64_t arguments, std::uint32_t initiator);
+std::array<std::uint32_t, 3> PartialGroupThreads(const std::array<std::uint32_t, 3>& groups, const std::array<std::uint32_t, 3>& numThreads);
 std::array<std::uint32_t, 5> ResolveDispatch(std::span<const std::uint32_t> packet, const QueueState& queue);
 DrawParameters ResolveDraw(std::span<const std::uint32_t> packet, const QueueState& queue);
 
