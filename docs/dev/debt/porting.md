@@ -22,7 +22,7 @@ Every entry below is a fix present in a fork or pre-sync branch but **not** in `
 | 9 | First-use shader/texture work off queue-0 draw path | biladeiro/wolverine-main `0b4545d8b3` | `Graphics/src/Draw.cpp`, `Execution/src/Driver/Shaders/ShaderRegistry.cpp`, `Execution/src/ShaderMemory.cpp`, `Graphics/src/Recorder.cpp`, `Recompiler.cpp/hpp` | Not ported (BindlessHeapTable deleted) |
 | 10 | Skip-listed dispatches return early instead of throwing | biladeiro/wolverine-main `a15541ace1` | `Graphics/src/Draw.cpp` or dispatch path | Not ported |
 | 11 | Batch cap 256 recorded draws/dispatches (was 64) | biladeiro/wolverine-main `0e47407146` | `Execution/src/Driver/Synchronization/DeferredLabels.cpp` | **Ported** (`f931bbf018`) |
-| 12 | Fewer black frames/hitches from first-use work | biladeiro/wolverine-main `8508ebf053` | `Graphics/src/Draw.cpp` | Not ported |
+| 12 | Fewer black frames/hitches from first-use work | biladeiro/wolverine-main `8508ebf053` | `Graphics/src/Draw.cpp`, `shader/recompiler/ShaderDiskCache.cpp/hpp`, `Graphics/src/Pipeline.cpp`, `Graphics/src/PipelineCache.cpp` | Not ported (complex: adds `SpecializedStored`, `APS5_REGISTERED_SKIP_MS`, pipeline cache save interval) |
 
 ## Shader (Potter PS5)
 
