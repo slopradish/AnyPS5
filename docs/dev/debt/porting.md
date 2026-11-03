@@ -76,7 +76,8 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | superseded: upstream `DepthSurface`/`DepthSurface.cpp` already keeps depth GPU-resident (HTILE, slices, sampling, guards) |
 | StorageAlias wiring | legacy `4d29e7e9fb` | pending: call `AliasBlockCopies` from `writeBackLayers` |
 | DrawAhead/PreparedDraw | legacy `f4...`/`0c...` | blocked: needs legacy `Pm4::StateEffect`/`ApplyRegisterPairs` and `Driver` pipeline declarations |
-| SpirvWaveExchange/NggPassthrough | legacy | blocked: needs legacy `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers` in the translator |
+| SpirvWaveExchange | legacy | superseded: upstream `spannedWaves` is the maintained equivalent |
+| NggPassthrough | legacy | ported (`ffe1235e97`): `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers`, analysis module |
 
 ## Pinning for the next sync
 
@@ -102,7 +103,7 @@ branch dropped. The report above makes each loss visible; the commands below fin
     {"id": "misaligned-draw-buffers", "source": "f83abf2a7e", "status": "ported", "paths": ["core/libs/prx/libSceAgcDriver/Graphics/src/GuestBufferMemory.cpp"], "note": "bind misaligned draw buffer regions in place"},
     {"id": "skip-zero-fill-snapshots", "source": "fef87ce8f6", "status": "ported", "paths": ["core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp"], "marker": "RawTextureSnapshots", "note": "skip zero-filling sampled texture snapshots"},
     {"id": "wait-timeout-guard", "source": "3cb2fc3694", "status": "already", "paths": ["core/libs/prx/libSceAgcDriver/Execution/src/Driver/Synchronization/WaitMemory.cpp"], "note": "guard the reported wait-timeout set against concurrent queues"},
-    {"id": "refresh-proof-pending", "source": "88d7bb6211", "status": "missing", "paths": ["core/libs/prx/libSceAgcDriver/Graphics/include/Texture.hpp", "core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp"], "marker": "othersHold", "note": "prove storage image refreshes over other pending images"},
+    {"id": "refresh-proof-pending", "source": "88d7bb6211", "status": "ported", "paths": ["core/libs/prx/libSceAgcDriver/Graphics/include/Texture.hpp", "core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp"], "marker": "refreshProof.otherCount", "note": "prove storage image refreshes over other pending images"},
     {"id": "first-use-off-draw-path", "source": "0b4545d8b3", "status": "missing", "paths": ["core/libs/prx/libSceAgcDriver/Execution/src/Driver/Draw/DrawCapture.cpp", "core/libs/prx/libSceAgcDriver/Execution/src/Driver/Shaders/ShaderRegistry.cpp", "core/libs/prx/libSceAgcDriver/Execution/src/ShaderMemory.cpp", "core/libs/prx/libSceAgcDriver/Graphics/src/Draw.cpp", "core/libs/prx/libSceAgcDriver/Graphics/src/Recorder.cpp", "core/shader/recompiler/Recompiler.cpp", "core/shader/recompiler/Recompiler.hpp"], "marker": "deferAtUse", "note": "keep first-use shader and texture work off the queue-0 draw path"},
     {"id": "skip-listed-dispatches", "source": "a15541ace1", "status": "missing", "paths": ["core/libs/prx/libSceAgcDriver/Execution/src/Driver/Dispatch/Dispatch.cpp", "core/libs/prx/libSceAgcDriver/Execution/src/Driver/Dispatch/IndirectDispatch.cpp", "core/libs/prx/libSceAgcDriver/Execution/src/Driver/Shaders/ShaderRegistry.cpp", "core/libs/prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"], "marker": "SkipListed", "note": "skip-listed dispatches return early instead of throwing"},
     {"id": "batch-cap-256", "source": "0e47407146", "status": "ported", "paths": ["core/libs/prx/libSceAgcDriver/Execution/src/Driver/Synchronization/DeferredLabels.cpp"], "note": "batch cap 256 recorded draws/dispatches"},
