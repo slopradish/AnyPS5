@@ -9,7 +9,7 @@ Every entry below is a fix present in a fork or pre-sync branch but **not** in `
 | 1 | CMASK fast clears on colour targets | dean/astrobot `812c200ebe` + legacy | `Graphics/src/Draw.cpp`, `Graphics/src/State.cpp`, `Graphics/src/TextureDetiler.cpp` | Already in tree (upstream) |
 | 2 | Sampled texture soft limit to half device budget | dean/astrobot `023ef90838` | `Graphics/src/Texture.cpp` (or sampled texture budget code) | Not ported |
 | 3 | Charge cached sampled textures actual bytes | dean/astrobot `f3c934082e` | `Graphics/src/ShaderResources.cpp` | **Ported** (`d06f56606c`) |
-| 4 | Release sampled texture host copies under host pressure | dean/astrobot `93faece10b` | `Graphics/src/Texture.cpp` or `ShaderMemory.cpp` | Not ported |
+| 4 | Release sampled texture host copies under host pressure | dean/astrobot `93faece10b` | `Graphics/src/ShaderResources.cpp` | Not ported (complex: adds `RunHostReleasePass`, `hostReleased` field, `snapshotSize` field, `HostCopyRelease()` env var) |
 | 5 | Bind misaligned draw buffer regions in place | dean/astrobot `f83abf2a7e` | `Graphics/src/GuestBufferMemory.cpp` | **Ported** (`3dccf1ef54`) |
 | 6 | Skip zero-filling sampled texture snapshots | dean/astrobot `fef87ce8f6` | `Graphics/src/ShaderResources.cpp` | **Ported** (`6df1db86db`) |
 | 7 | Guard wait-timeout set against concurrent queues | dean/astrobot `3cb2fc3694` | `Execution/src/Driver/Synchronization/WaitMemory.cpp` | Already in tree |
