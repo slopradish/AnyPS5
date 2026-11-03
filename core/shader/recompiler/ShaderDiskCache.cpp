@@ -148,14 +148,14 @@ static_assert(fieldCount<SamplerResource>() == 8, "SamplerResource changed: upda
 static_assert(fieldCount<SampledResourcePair>() == 3, "SampledResourcePair changed: update the info encoder");
 static_assert(fieldCount<StageInput>() == 5, "StageInput changed: update the info encoder");
 static_assert(fieldCount<StageOutput>() == 4, "StageOutput changed: update the info encoder");
-static_assert(fieldCount<IrResourcePlan>() == 25, "IrResourcePlan changed: update EncodePlan and DecodePlan");
+static_assert(fieldCount<IrResourcePlan>() == 26, "IrResourcePlan changed: update EncodePlan and DecodePlan");
 static_assert(fieldCount<GuestRegister>() == 2, "GuestRegister changed: update the plan value encoder");
 static_assert(fieldCount<MemoryInfo>() == 32, "MemoryInfo changed: update the plan encoder");
 static_assert(fieldCount<DescriptorSource>() == 4, "DescriptorSource changed: update the plan encoder");
 static_assert(fieldCount<TableColumn>() == 18, "TableColumn changed: update the plan encoder");
 static_assert(fieldCount<KeyDomain>() == 4, "KeyDomain changed: update the plan encoder");
 static_assert(fieldCount<ResourceBlock>() == 5, "ResourceBlock changed: update the plan encoder");
-static_assert(fieldCount<SrtRead>() == 2, "SrtRead changed: update the plan encoder");
+static_assert(fieldCount<SrtRead>() == 3, "SrtRead changed: update the plan encoder");
 static_assert(fieldCount<UniformFill>() == 5, "UniformFill changed: update the plan encoder");
 static_assert(fieldCount<UniformFillPlan>() == 2, "UniformFillPlan changed: update the plan encoder");
 
@@ -1194,6 +1194,7 @@ bool encodePlan(Writer& writer, const IrResourcePlan& plan) {
     writer.List(plan.srtReads, [&](Writer& out, const SrtRead& read) {
         out.Value(valueIndex(read.value));
         out.Value(read.flatOffset);
+        out.Value(read.conditional);
     });
     writer.Values(std::span<const std::uint32_t>(plan.guardedSrtSlots));
     writer.Value(plan.srtGuardOffset);
@@ -1201,6 +1202,7 @@ bool encodePlan(Writer& writer, const IrResourcePlan& plan) {
     writer.Values(std::span<const std::uint8_t>(plan.pureFlatSlots));
     writer.Value(plan.denseValueIds);
     writer.Value(plan.requiresSpecializationMemory);
+    writer.Value(plan.allocationRequests);
     writer.Value(plan.srtPlanComplete);
     writer.Value(plan.resourceTrackingComplete);
     encodeShaderInfo(writer, plan.info);
@@ -1359,6 +1361,7 @@ bool decodePlan(Reader& reader, IrResourcePlan& plan) {
     reader.List(plan.srtReads, 8, [&](Reader& in, SrtRead& read) {
         read.value = valueAt(in.Get<std::uint32_t>());
         in.Value(read.flatOffset);
+        in.Value(read.conditional);
     });
     reader.Values(plan.guardedSrtSlots);
     reader.Value(plan.srtGuardOffset);
@@ -1366,6 +1369,7 @@ bool decodePlan(Reader& reader, IrResourcePlan& plan) {
     reader.Values(plan.pureFlatSlots);
     reader.Value(plan.denseValueIds);
     reader.Value(plan.requiresSpecializationMemory);
+    reader.Value(plan.allocationRequests);
     reader.Value(plan.srtPlanComplete);
     reader.Value(plan.resourceTrackingComplete);
     decodeShaderInfo(reader, plan.info);

@@ -21,6 +21,8 @@
 
 namespace AgcDriver {
 
+namespace Graphics { class DepthImage; }
+
 // A compute dispatch's Vulkan objects (VulkanDevice.cpp), shared by every dispatch of one compiled
 // variant.
 struct ComputePipelineObjects;
