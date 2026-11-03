@@ -423,6 +423,8 @@ set(agcDriverSources
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/DccMetadata.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/TextureTiling.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/StorageAlias.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/TextureResidency.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/GpuClock.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/MultisampleTextureLayout.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/TextureDetiler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/MultisampleReadback.cpp
