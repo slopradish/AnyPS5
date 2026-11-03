@@ -400,7 +400,7 @@ jobs:
           done
       - run: cmake -S core/libs/tests/register_context -B build/register-context -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
       - run: cmake --build build/register-context --parallel
-      - run: ctest --test-dir build/register-context --output-on-failure --repeat until-fail:3 --no-tests=error
+      - run: ctest --test-dir build/register-context --output-on-failure --timeout 30 --repeat until-fail:3 --no-tests=error
 
   write-watch:
     needs: eligibility
@@ -434,7 +434,7 @@ jobs:
           done
       - run: cmake -S core/libs/tests/write_watch -B build/write-watch -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build/write-watch --parallel
-      - run: ctest --test-dir build/write-watch --output-on-failure --repeat until-fail:3 --no-tests=error
+      - run: ctest --test-dir build/write-watch --output-on-failure --timeout 30 --repeat until-fail:3 --no-tests=error
 
   linux:
     needs: eligibility
@@ -773,4 +773,4 @@ jobs:
           done
       - run: cmake -S core/libs/tests/edge_watch -B build/edge-watch -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build/edge-watch --parallel
-      - run: ctest --test-dir build/edge-watch --output-on-failure --repeat until-fail:3 --no-tests=error
+      - run: ctest --test-dir build/edge-watch --output-on-failure --timeout 30 --repeat until-fail:3 --no-tests=error
