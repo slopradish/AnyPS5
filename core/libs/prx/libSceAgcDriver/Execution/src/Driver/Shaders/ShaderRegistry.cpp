@@ -60,6 +60,24 @@
 
 namespace AgcDriver::DriverDetail {
 
+namespace {
+
+thread_local bool deferringDrawPreparation = false;
+
+}
+
+DeferDrawPreparationScope::DeferDrawPreparationScope() {
+    deferringDrawPreparation = true;
+}
+
+DeferDrawPreparationScope::~DeferDrawPreparationScope() {
+    deferringDrawPreparation = false;
+}
+
+bool DeferringDrawPreparation() {
+    return deferringDrawPreparation;
+}
+
 
 std::shared_ptr<const ShaderSnapshot> ReadRawShader(std::uint64_t address, const std::shared_ptr<const ShaderSnapshot>& retained) {
     const auto drain = [](std::uint64_t first, std::size_t bytes) {
@@ -1143,6 +1161,22 @@ ShaderRecompiler::PreparedShaderInvocation InvocationFor(const ShaderSnapshot& s
         source.context.linkedCallFallbacks = linked.fallbacks;
     }
     std::unique_lock lock(snapshot.prepared->mutex);
+    static const bool awaitDraws = std::getenv("APS5_AWAIT_REGISTERED_DRAWS") != nullptr;
+    static const bool deferRegistered = std::getenv("APS5_DEFER_REGISTERED_DRAWS") != nullptr;
+    static const auto skipFor = std::chrono::milliseconds([] {
+        const char* text = std::getenv("APS5_REGISTERED_SKIP_MS");
+        const int parsed = text != nullptr ? std::atoi(text) : 300;
+        return parsed >= 0 ? parsed : 300;
+    }());
+    if (deferRegistered && deferringDrawPreparation && !awaitDraws && snapshot.prepared->pending) {
+        auto& firstSkip = snapshot.prepared->firstSkip;
+        const auto now = std::chrono::steady_clock::now();
+        if (firstSkip == std::chrono::steady_clock::time_point{}) firstSkip = now;
+        if (now - firstSkip < skipFor) {
+            PrioritizeRegistrationPreparation(*snapshot.prepared);
+            throw ShaderNotReady("AGC driver: the shader is still being prepared in the background; the draw is skipped until it is ready");
+        }
+    }
     AwaitRegisteredPreparation(*snapshot.prepared, lock);
     if (std::ranges::find(snapshot.prepared->convertedSamples, codeOffset) != snapshot.prepared->convertedSamples.end()) source.context.convertedSamples = true;
     if (std::ranges::find(snapshot.prepared->layerRowSamples, codeOffset) != snapshot.prepared->layerRowSamples.end()) source.context.layerRowSamples = true;

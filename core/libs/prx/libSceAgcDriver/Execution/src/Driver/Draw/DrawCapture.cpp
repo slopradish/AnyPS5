@@ -159,6 +159,7 @@ std::shared_ptr<const ShaderRecompiler::RecompileResult> Driver::materializeDraw
     try {
         stageCapture.compiled = [&] {
         const ShaderRecompiler::DeferSpecializationScope defer;
+        const DeferDrawPreparationScope preparation;
         return invocation.Materialize(*capture);
     }();
         stageCapture.capture = capture;
