@@ -75,7 +75,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | FSR swapchain teardown order | Kyty `5b48933306` | not applicable: no FSR path in this tree |
 | Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | superseded: upstream `DepthSurface`/`DepthSurface.cpp` already keeps depth GPU-resident (HTILE, slices, sampling, guards) |
 | StorageAlias wiring | legacy `4d29e7e9fb` | pending: call `AliasBlockCopies` from `writeBackLayers` |
-| DrawAhead/PreparedDraw | legacy | partial: `Pm4::StateEffect`/`ReadRegisterPairs`/`ApplyRegisterPairs` ported (`9bcb13c466`); the module needs the legacy `Driver` front-end declarations and draw-path call sites |
+| DrawAhead/PreparedDraw | legacy | superseded: this tree prepares queue-0 draws through the recipe/draw pipeline (`PrepareRecipe`, `DrawPipeline`) rather than the legacy front end; `Pm4::StateEffect`/`ApplyRegisterPairs` and `DepthMetadataBlit` are ported as the precheck substrate (`9bcb13c466`, `39a6361ea8`) |
 | SpirvWaveExchange | legacy | superseded: upstream `spannedWaves` is the maintained equivalent |
 | NggPassthrough | legacy | ported (`ffe1235e97`): `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers`, analysis module |
 
