@@ -86,10 +86,8 @@ void TranslationContext::emitCompareResult(const RdnaInstruction& inst, IrU1 val
     }
     IrValue& masked = ir.LogicalAnd(ir.GetExec(), value.Value());
     if (cmpx) {
-        const std::array<IrU32, 2> mask = ballotMask(IrU1(masked));
-        RdnaOperand vcc;
-        vcc.kind = RdnaOperandKind::VccLo;
-        writeMask(vcc, IrU1(value.Value()));
+        const bool writesDestination = inst.destination2.kind != RdnaOperandKind::Unknown && inst.destination2.kind != RdnaOperandKind::Null;
+        const std::array<IrU32, 2> mask = writesDestination ? writeMask(inst.destination2, IrU1(masked)) : ballotMask(IrU1(masked));
         ir.SetExec(masked);
         ir.SetExecLo(mask[0].Value());
         ir.SetExecHi(mask[1].Value());
