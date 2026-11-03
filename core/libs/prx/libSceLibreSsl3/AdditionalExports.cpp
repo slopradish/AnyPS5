@@ -613,10 +613,6 @@ int APS5_VABI Unknown_qGsc6uT6p1E_nid_no_patch() {
 }
 APS5_EXPORT("qGsc6uT6p1E", Unknown_qGsc6uT6p1E_nid_no_patch);
 
-int APS5_VABI ERR_reason_error_string_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI X509_add1_ext_i2d_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
