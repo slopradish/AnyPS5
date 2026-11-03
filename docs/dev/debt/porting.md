@@ -27,7 +27,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 
 | # | Fix | Source | Status |
 |---|-----|--------|--------|
-| 9 | First-use shader and texture work off the queue-0 draw path | biladeiro `0b4545d8b3` | partial: the specialization deferral (`b3b837f9d5`) and the registration-time skip (`533d933b4c`, `APS5_DEFER_REGISTERED_DRAWS`/`APS5_REGISTERED_SKIP_MS`) are ported; the heap scan bound remains |
+| 9 | First-use shader and texture work off the queue-0 draw path | biladeiro `0b4545d8b3` | ported (`b3b837f9d5`, `533d933b4c`, `460728063f`): specialization deferral, registration-time skip, specialized disk cache; this tree's resource cache has no equivalent heap-feedback scan to bound |
 | 10 | Skip-listed dispatches return early instead of throwing | biladeiro `a15541ace1` | already in tree: `SkippedShader` returns before the shader is prepared (`APS5_SKIP_SHADER` / `APS5_SKIP_SHADER_FILE`); only the hash-list form differs |
 | 11 | Batch cap 256 recorded draws/dispatches | biladeiro `0e47407146` | ported (`f931bbf018`) |
 | 12 | Fewer black frames and hitches from first-use work | biladeiro `8508ebf053` | partial: pipeline-cache save interval, texture-log gating, the specialized disk cache (`1096fb568e`) and the registration-time skip (`533d933b4c`) are in; the heap scan bound remains |
