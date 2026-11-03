@@ -9,9 +9,32 @@
 #include <stdexcept>
 #include <thread>
 
+extern "C" {
+int APS5_VABI APS5_Test_GetPthreadSemWaiterCount(PthreadSem* sem);
+int APS5_VABI APS5_Test_GetPthreadSemApiPauseCount();
+void APS5_VABI APS5_Test_SetPthreadSemApiPause(int kind);
+void APS5_VABI APS5_Test_ReleasePthreadSemApiPause();
+}
+
 static constexpr int SCE_OK = 0;
 
 static void Require(bool value) { if (!value) std::abort(); }
+
+static void WaitForSemaphoreWaiters(PthreadSem* sem, int expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (APS5_Test_GetPthreadSemWaiterCount(sem) != expected) {
+        if (std::chrono::steady_clock::now() >= deadline) Require(false);
+        std::this_thread::yield();
+    }
+}
+
+static void WaitForSemaphoreApiPause() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (APS5_Test_GetPthreadSemApiPauseCount() != 1) {
+        if (std::chrono::steady_clock::now() >= deadline) Require(false);
+        std::this_thread::yield();
+    }
+}
 
 static void CheckValueLimit() {
     constexpr unsigned int maximum = 0x7fffffffu;
@@ -52,6 +75,16 @@ static void* APS5_VABI Poster(void* arg) {
     return nullptr;
 }
 
+struct CancellableWaitContext {
+    PthreadSem* sem;
+};
+
+static void* APS5_VABI CancellableWaiter(void* arg) {
+    auto& context = *static_cast<CancellableWaitContext*>(arg);
+    (void)scePthreadSemWait(context.sem);
+    return nullptr;
+}
+
 int main() {
     CheckValueLimit();
 
@@ -76,9 +109,59 @@ int main() {
     Require(scePthreadJoin(thread, nullptr) == SCE_OK);
     Require(scePthreadSemDestroy(&context.sem) == SCE_OK);
 
-    bool rejected = false;
-    try { scePthreadSemWait(&context.sem); }
-    catch (const std::runtime_error&) { rejected = true; }
-    Require(rejected);
+    Require(scePthreadSemDestroy(&context.sem) == SCE_KERNEL_ERROR_EINVAL);
     Require(scePthreadSemDestroy(&sem) == SCE_OK);
+
+    PthreadSem busySem = nullptr;
+    Require(scePthreadSemInit(&busySem, 0, 0, nullptr) == SCE_OK);
+    std::atomic<int> waitResult{-1};
+    std::thread waiterThread([&] {
+        waitResult = scePthreadSemWait(&busySem);
+    });
+    WaitForSemaphoreWaiters(&busySem, 1);
+    Require(scePthreadSemDestroy(&busySem) == SCE_KERNEL_ERROR_EBUSY);
+    Require(scePthreadSemPost(&busySem) == SCE_OK);
+    waiterThread.join();
+    Require(waitResult == SCE_OK);
+    Require(scePthreadSemDestroy(&busySem) == SCE_OK);
+
+    PthreadSem cancelSem = nullptr;
+    Require(scePthreadSemInit(&cancelSem, 0, 0, nullptr) == SCE_OK);
+    CancellableWaitContext cancelContext{&cancelSem};
+    Pthread cancelThread = nullptr;
+    Require(scePthreadCreate(&cancelThread, nullptr, CancellableWaiter, &cancelContext, nullptr) == SCE_OK);
+    WaitForSemaphoreWaiters(&cancelSem, 1);
+    Require(scePthreadCancel(cancelThread) == SCE_OK);
+    Require(scePthreadJoin(cancelThread, nullptr) == SCE_OK);
+    Require(APS5_Test_GetPthreadSemWaiterCount(&cancelSem) == 0);
+    Require(scePthreadSemDestroy(&cancelSem) == SCE_OK);
+
+    for (int iter = 0; iter < 50; ++iter) {
+        PthreadSem raceSem = nullptr;
+        Require(scePthreadSemInit(&raceSem, 0, 0, nullptr) == SCE_OK);
+        std::thread racer([&] {
+            Require(scePthreadSemWait(&raceSem) == SCE_OK);
+            Require(scePthreadSemDestroy(&raceSem) == SCE_OK);
+        });
+        WaitForSemaphoreWaiters(&raceSem, 1);
+        Require(scePthreadSemPost(&raceSem) == SCE_OK);
+        racer.join();
+    }
+
+    PthreadSem queuedSem = nullptr;
+    Require(scePthreadSemInit(&queuedSem, 0, 0, nullptr) == SCE_OK);
+    APS5_Test_SetPthreadSemApiPause(1);
+    std::atomic<int> postResult{-1};
+    std::thread concurrentPost([&] {
+        try {
+            postResult = scePthreadSemPost(&queuedSem);
+        } catch (...) {
+            postResult = -2;
+        }
+    });
+    WaitForSemaphoreApiPause();
+    Require(scePthreadSemDestroy(&queuedSem) == SCE_OK);
+    APS5_Test_ReleasePthreadSemApiPause();
+    concurrentPost.join();
+    Require(postResult == SCE_KERNEL_ERROR_EINVAL);
 }

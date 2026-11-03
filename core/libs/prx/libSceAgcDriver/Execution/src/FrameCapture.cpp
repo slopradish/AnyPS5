@@ -120,7 +120,7 @@ FrameCall decodeCall(FrameCallKind kind, std::span<const std::byte> payload) {
 }
 
 bool knownCall(std::uint32_t kind) {
-    return kind >= static_cast<std::uint32_t>(FrameCallKind::RegisterShader) && kind <= static_cast<std::uint32_t>(FrameCallKind::UnregisterVideoOutput);
+    return kind >= static_cast<std::uint32_t>(FrameCallKind::RegisterShader) && kind <= static_cast<std::uint32_t>(FrameCallKind::BindlessTables);
 }
 
 std::vector<std::byte> readFile(const std::filesystem::path& path) {
@@ -191,6 +191,10 @@ std::string_view FrameCallName(FrameCallKind kind) {
     case FrameCallKind::FrameStart: return "frame-start";
     case FrameCallKind::End: return "end";
     case FrameCallKind::DisplayBuffer: return "display-buffer";
+    case FrameCallKind::QueueStates: return "queue-states";
+    case FrameCallKind::AliasedPages: return "aliased-pages";
+    case FrameCallKind::Checkpoint: return "checkpoint";
+    case FrameCallKind::BindlessTables: return "bindless-tables";
     }
     throw std::runtime_error("frame capture: unknown call kind " + std::to_string(static_cast<std::uint32_t>(kind)));
 }
@@ -300,6 +304,18 @@ void FrameCaptureWriter::WriteReference(std::uint64_t index, std::uint64_t addre
     writeChunk(chunk, payload);
 }
 
+void FrameCaptureWriter::WriteCheckpoint(std::uint64_t frame, std::uint64_t address, std::span<const std::byte> bytes) {
+    const auto payload = compress(bytes);
+    FrameMemoryChunk chunk;
+    chunk.kind = FrameMemoryKind::Checkpoint;
+    chunk.group = frame;
+    chunk.address = address;
+    chunk.bytes = bytes.size();
+    chunk.compressedBytes = payload.size();
+    std::lock_guard lock(mutex);
+    writeChunk(chunk, payload);
+}
+
 void FrameCaptureWriter::Finish(std::string_view header) {
     std::lock_guard lock(mutex);
     requireCapture(!finished, "capture finished twice");
@@ -403,7 +419,7 @@ FrameCaptureReader::FrameCaptureReader(const std::filesystem::path& directory) :
         FrameMemoryChunk chunk;
         const auto kind = decoder.Take<std::uint32_t>("memory kind");
         const auto rangeKind = decoder.Take<std::uint32_t>("range kind");
-        requireCapture(kind >= 1 && kind <= 4 && rangeKind >= 1 && rangeKind <= 6, memoryPath.string() + ": corrupt chunk header at byte " + std::to_string(offset));
+        requireCapture(kind >= 1 && kind <= 5 && rangeKind >= 1 && rangeKind <= 6, memoryPath.string() + ": corrupt chunk header at byte " + std::to_string(offset));
         chunk.kind = static_cast<FrameMemoryKind>(kind);
         chunk.rangeKind = static_cast<FrameRangeKind>(rangeKind);
         chunk.protection = decoder.Take<std::uint32_t>("protection");

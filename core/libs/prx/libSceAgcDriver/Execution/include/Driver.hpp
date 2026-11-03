@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <cstddef>
 #include "SceTypes.hpp"
 #include "SceShaders.hpp"
@@ -34,8 +35,18 @@ extern "C" void AgcDriverRequestScreenshot_nid_postfix();
 extern "C" void AgcDriverSuspendPoint_nid_postfix();
 extern "C" void AgcDriverSerialProgress_nid_postfix(std::uint64_t* accepted, std::uint64_t* completed);
 extern "C" std::size_t AgcDriverAwaitedWaits_nid_postfix(AgcDriver::AwaitedWait* waits, std::size_t capacity);
+extern "C" bool AgcDriverQuiescent_nid_postfix();
+extern "C" bool AgcDriverFailed_nid_postfix();
+extern "C" bool AgcDriverSettle_nid_postfix();
+extern "C" void AgcDriverUseGdsAt_nid_postfix(std::uint64_t address);
+// The bindless tables registered so far, and the heap primer (Graphics/include/BindlessRegistrations.hpp words).
+extern "C" std::vector<std::uint64_t> AgcDriverBindlessRegistrations_nid_postfix();
+extern "C" void AgcDriverPrimeBindlessTables_nid_postfix(std::span<const std::uint64_t> words);
+extern "C" std::vector<std::uint32_t> AgcDriverSaveQueueStates_nid_postfix();
+extern "C" void AgcDriverLoadQueueStates_nid_postfix(std::span<const std::uint32_t> words);
 extern "C" std::uint64_t AgcDriverDispatchesAdoptedAhead_nid_postfix();
 extern "C" std::uint64_t AgcDriverDispatchesRejectedAhead_nid_postfix();
+extern "C" void AgcDriverMissAheadTotals_nid_postfix(std::uint64_t* started, std::uint64_t* used);
 extern "C" void AgcDriverSetAheadAdoptHook_nid_postfix(void (*hook)());
 extern "C" void AgcDriverRegisterShader_nid_postfix(const Shader* shader);
 extern "C" void AgcDriverResolveShaderAbi_nid_postfix(const Shader* shader, std::span<const ShaderRegister> context, std::span<const ShaderRegister> primitive);

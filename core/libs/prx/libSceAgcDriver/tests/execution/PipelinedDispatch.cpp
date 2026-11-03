@@ -159,6 +159,8 @@ int main() {
         }
         const char* dispatchSwitch = std::getenv("APS5_PIPELINE_DISPATCH");
         const bool pipelinedDispatch = dispatchSwitch != nullptr && dispatchSwitch[0] != '\0' && dispatchSwitch[0] != '0';
+        const char* missSwitch = std::getenv("APS5_PIPELINE_DISPATCH_MISSES");
+        const bool missItems = pipelinedDispatch && missSwitch != nullptr && missSwitch[0] != '\0' && missSwitch[0] != '0';
 
         Shader shader{};
         shader.file_header = 0x34333231;
@@ -235,6 +237,7 @@ int main() {
             } release{released};
             WaitUntil([] { return DrawPipeline::QueuedItems() == 0; }, "the pipeline to empty before descriptor round " + std::to_string(round));
             const auto drainsBefore = DrawPipeline::DrainRequestsByOpcode(DispatchOpcode);
+            const auto captureDrainsBefore = DrawPipeline::DrainRequestsByOpcode(0x100);
             DrawPipeline::Queue0().Enqueue([&released] {
                 while (!released.load(std::memory_order_acquire)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }, {});
@@ -243,17 +246,17 @@ int main() {
             WaitUntil([] { return DrawPipeline::QueuedItems() >= 4; }, "the target and table fills queued behind the gate");
             auto dispatch = TableDispatch(TableCode.data());
             Submit(dispatch);
-            WaitUntil([&drainsBefore] { return DrawPipeline::QueuedItems() >= 5 || DrawPipeline::DrainRequestsByOpcode(DispatchOpcode) > drainsBefore; }, "the dispatch handled while the table fill is pending");
+            WaitUntil([&drainsBefore, &captureDrainsBefore, missItems] { return DrawPipeline::QueuedItems() >= 5 || DrawPipeline::DrainRequestsByOpcode(DispatchOpcode) > drainsBefore || (missItems && DrawPipeline::DrainRequestsByOpcode(0x100) > captureDrainsBefore); }, "the dispatch handled while the table fill is pending");
             released.store(true, std::memory_order_release);
             AgcDriverWaitIdle_nid_postfix();
             AgcDriver::GuestMemory::FlushGpuWrites(reinterpret_cast<std::uintptr_t>(Output), BufferBytes);
-            const auto drains = DrawPipeline::DrainRequestsByOpcode(DispatchOpcode) - drainsBefore;
+            const auto drains = DrawPipeline::DrainRequestsByOpcode(DispatchOpcode) - drainsBefore + (missItems ? DrawPipeline::DrainRequestsByOpcode(0x100) - captureDrainsBefore : 0u);
             for (std::uint32_t lane = 0; lane < Lanes; ++lane) {
                 check(Output[lane] == value + 1u, "descriptor round " + std::to_string(round) + ": lane " + std::to_string(lane) + " of the output is " + std::to_string(Output[lane]) + ", expected " + std::to_string(value + 1u) + " (the dispatch read the buffer the table named before the pending fill of the table)");
             }
             std::printf("pipelined dispatch: descriptor round %zu, fill 0x%08x, dispatch drains %llu\n", round, value, static_cast<unsigned long long>(drains));
             if (!pipelinedDispatch) check(drains >= 1, "a dispatch did not drain the pipeline, and APS5_PIPELINE_DISPATCH is off");
-            if (pipelinedDispatch) check(drains == 1, "a dispatch whose table entry is pending a write drained " + std::to_string(drains) + " times, expected once");
+            if (pipelinedDispatch) check(missItems ? drains >= 1 : drains == 1, "a dispatch whose table entry is pending a write drained " + std::to_string(drains) + " times, expected once");
         }
         const std::array<std::uint32_t, 5> scalarValues{0x13572468u, 0x2468ace0u, 0x0f1e2d3cu, 0x9abcdef0u, 0x31415926u};
         for (std::size_t round = 0; round < scalarValues.size(); ++round) {

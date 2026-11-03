@@ -5,6 +5,7 @@
 #include "prx/libc/include/GuestWriteWatch.hpp"
 #include <string_view>
 #include <barrier>
+#include <sstream>
 
 namespace {
 
@@ -322,6 +323,183 @@ void testShaderCode(const std::filesystem::path& directory, bool host, std::stri
     check(registered && captured == expected, "the complete separate shader code was not captured before registration");
 }
 
+void testPrologueHeader(const std::filesystem::path& directory) {
+    auto* bytes = allocate(1u << 20);
+    auto* shader = reinterpret_cast<Shader*>(bytes);
+    auto* code = bytes + (1u << 19);
+    constexpr std::size_t CodeBytes = 4096;
+    for (std::size_t i = 0; i < CodeBytes; ++i) code[i] = static_cast<std::byte>(i * 7 + 3);
+    *shader = {};
+    shader->file_header = 0x34333231u;
+    shader->version = 0x18u;
+    shader->header_size = sizeof(Shader);
+    shader->shader_size = CodeBytes;
+    shader->code = code;
+    std::vector<std::byte> registered(sizeof(Shader));
+    std::memcpy(registered.data(), shader, sizeof(Shader));
+    auto* recorder = AgcDriver::FrameRecorder::Active();
+    check(recorder != nullptr, "frame recorder is disabled");
+    recorder->RegisterShader(shader);
+    std::memset(static_cast<void*>(shader), 0x5a, sizeof(Shader));
+    std::vector<std::byte> later(sizeof(Shader));
+    std::memcpy(later.data(), shader, sizeof(Shader));
+    recorder->FrameBoundary();
+    recorder->FrameBoundary();
+    const FrameCaptureReader reader(directory);
+    std::vector<const FrameMemoryChunk*> rewritten;
+    bool restoredFirst = false;
+    for (const auto& call : reader.Calls()) {
+        if (call.kind == FrameCallKind::RegisterShader) {
+            check(call.address == address(shader), "the prologue registration names another header");
+            break;
+        }
+        if (call.kind != FrameCallKind::Memory) continue;
+        for (const auto& chunk : reader.Chunks()) {
+            if (chunk.kind != FrameMemoryKind::Delta || chunk.group != call.values.at(0)) continue;
+            rewritten.push_back(&chunk);
+            restoredFirst = restoredFirst || (chunk.address == address(shader) && reader.Read(chunk) == registered);
+        }
+    }
+    check(restoredFirst, "the prologue registration was not preceded by the header it registered");
+    std::memcpy(shader, registered.data(), registered.size());
+    restoreRewritten(reader, rewritten, Skipped{});
+    check(std::memcmp(shader, later.data(), later.size()) == 0, "the snapshot was not restored over the prologue header image");
+    check(reader.Header().find("\"prologue_rewrites\":1,") != std::string::npos, "the capture header does not count the prologue rewrite");
+    const auto states = std::find_if(reader.Calls().begin(), reader.Calls().end(), [](const FrameCall& call) { return call.kind == FrameCallKind::QueueStates; });
+    const auto start = std::find_if(reader.Calls().begin(), reader.Calls().end(), [](const FrameCall& call) { return call.kind == FrameCallKind::FrameStart; });
+    check(states != reader.Calls().end() && states < start, "the capture does not record the queue states before the first frame");
+    std::vector<std::uint32_t> words;
+    for (const auto value : states->values) words.push_back(static_cast<std::uint32_t>(value));
+    AgcDriverLoadQueueStates_nid_postfix(words);
+    check(AgcDriverSaveQueueStates_nid_postfix() == words, "loaded queue states do not save back unchanged");
+}
+
+}
+
+void testCheckpoint(const std::filesystem::path& directory) {
+    auto* bytes = allocate(4 * FrameCaptureWriter::BlockBytes);
+    std::fill_n(bytes, 4 * FrameCaptureWriter::BlockBytes, std::byte{0x11});
+    auto* recorder = AgcDriver::FrameRecorder::Active();
+    check(recorder != nullptr, "frame recorder is disabled");
+    recorder->FrameBoundary();
+    bytes[FrameCaptureWriter::BlockBytes + 5] = std::byte{0x22};
+    recorder->FrameBoundary();
+    const FrameCaptureReader reader(directory);
+    std::size_t blocks = 0;
+    for (const auto& chunk : reader.Chunks()) {
+        if (chunk.kind != FrameMemoryKind::Checkpoint) continue;
+        ++blocks;
+        check(chunk.address == address(bytes + FrameCaptureWriter::BlockBytes) && reader.Read(chunk)[5] == std::byte{0x22}, "the checkpoint holds another block");
+    }
+    check(blocks == 1, "the checkpoint does not hold exactly the changed block");
+    check(std::any_of(reader.Calls().begin(), reader.Calls().end(), [](const FrameCall& call) { return call.kind == FrameCallKind::Checkpoint; }), "the capture has no checkpoint call");
+    const auto report = directory / "checkpoint.csv";
+    const auto lines = [&] {
+        std::ifstream file(report);
+        std::size_t count = 0;
+        for (std::string line; std::getline(file, line);) ++count;
+        return count;
+    };
+    compareCheckpoint(reader, report, Skipped{});
+    check(lines() == 1, "an unchanged checkpoint block was reported as differing");
+    bytes[FrameCaptureWriter::BlockBytes + 6] = std::byte{0x33};
+    compareCheckpoint(reader, report, Skipped{});
+    check(lines() == 2, "a differing checkpoint block was not reported");
+}
+
+#ifdef _WIN32
+void testAliasedPages(const std::filesystem::path& directory) {
+    constexpr std::size_t PageBytes = 0x4000;
+    auto* section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, 0, PageBytes, nullptr);
+    check(section != nullptr, "test section creation failed");
+    auto* first = static_cast<std::byte*>(GuestArena::GuestArenaAllocate_nid_postfix(PageBytes, 65536));
+    auto* second = static_cast<std::byte*>(GuestArena::GuestArenaAllocate_nid_postfix(PageBytes, 65536));
+    check(first != nullptr && second != nullptr, "guest allocation failed");
+    GuestArena::GuestArenaMapDirect_nid_postfix(first, PageBytes, section, 0, PAGE_READWRITE);
+    GuestArena::GuestArenaMapDirect_nid_postfix(second, PageBytes, section, 0, PAGE_READWRITE);
+    CloseHandle(section);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(first, PageBytes, true, true, true);
+        mutation.Add(second, PageBytes, true, true, true);
+    }
+    first[16] = std::byte{0x5a};
+    check(second[16] == std::byte{0x5a}, "the test pages do not alias");
+    auto* recorder = AgcDriver::FrameRecorder::Active();
+    check(recorder != nullptr, "frame recorder is disabled");
+    recorder->FrameBoundary();
+    recorder->FrameBoundary();
+    const FrameCaptureReader reader(directory);
+    const auto aliases = aliasedPages(reader);
+    const auto one = aliases.groupOf.find(address(first));
+    const auto other = aliases.groupOf.find(address(second));
+    check(aliases.pageBytes == PageBytes && one != aliases.groupOf.end() && other != aliases.groupOf.end() && one->second == other->second, "the capture does not list the two views as one backing");
+    auto* third = static_cast<std::byte*>(GuestArena::GuestArenaAllocate_nid_postfix(PageBytes, 65536));
+    auto* fourth = static_cast<std::byte*>(GuestArena::GuestArenaAllocate_nid_postfix(PageBytes, 65536));
+    AliasedPages replayed;
+    replayed.pageBytes = PageBytes;
+    replayed.groupOf = {{address(third), 0}, {address(fourth), 0}};
+    std::map<std::uint64_t, void*> sections;
+    commitWithAliases(third, PageBytes, replayed, sections);
+    commitWithAliases(fourth, PageBytes, replayed, sections);
+    for (const auto& [group, handle] : sections) CloseHandle(handle);
+    third[32] = std::byte{0x77};
+    check(fourth[32] == std::byte{0x77}, "replayed aliased pages do not share one backing");
+}
+#endif
+
+// The ranges a replay cannot map because they lie on a host region of its process (it then starts again).
+void testHostCollisions(const std::filesystem::path& directory) {
+    FrameCaptureWriter writer(directory);
+    writer.WriteRange(0x10000000, 0x20000, FrameRangeKind::Watched, 3, FrameRangeAccess::Readable | FrameRangeAccess::Gpu);
+    writer.WriteRange(0x20000000, 0x10000, FrameRangeKind::Watched, 3, FrameRangeAccess::Readable);
+    writer.WriteRange(0x30000000, 0x10000, FrameRangeKind::Host, 3, FrameRangeAccess::Readable | FrameRangeAccess::Gpu);
+    writer.Finish("{}");
+    const FrameCaptureReader reader(directory);
+    // A host region at 0x1001f000-0x10021000 and one inside the host-kind range (those are mapped apart, never checked).
+    const auto overlaps = [](std::uint64_t address, std::uint64_t bytes) {
+        const auto hits = [&](std::uint64_t begin, std::uint64_t end) { return address < end && begin < address + bytes; };
+        return hits(0x1001f000, 0x10021000) || hits(0x30000000, 0x30001000);
+    };
+    const auto found = HostCollisions(reader, overlaps);
+    check(found.size() == 1 && found[0].first == 0x10000000 && found[0].second == 0x10020000, "only the guest range on the host region collides");
+    check(HostCollisions(reader, [](std::uint64_t, std::uint64_t) { return false; }).empty(), "no host region, no collision");
+}
+
+// --dedupe-prologue: only resolutions identical to one since the last registration or memory call.
+void testPrologueDedupe() {
+    const auto resolve = [](std::uint64_t address, std::uint32_t context) {
+        FrameCall call;
+        call.kind = FrameCallKind::ResolveShaderAbi;
+        call.address = address;
+        call.context = {ShaderRegister{0x200, context}};
+        return call;
+    };
+    FrameCall registration;
+    registration.kind = FrameCallKind::RegisterShader;
+    FrameCall memory = memoryCall(1, 0);
+    PrologueDedupe dedupe;
+    check(!dedupe.Redundant(resolve(0x1000, 1)), "the first resolution is executed");
+    check(dedupe.Redundant(resolve(0x1000, 1)), "an identical repeat is skipped");
+    check(!dedupe.Redundant(resolve(0x1000, 2)), "other registers are a different resolution");
+    check(!dedupe.Redundant(registration), "a registration is never skipped");
+    check(!dedupe.Redundant(resolve(0x1000, 1)), "a repeat after a registration is executed");
+    check(dedupe.Redundant(resolve(0x1000, 1)), "and its repeat skipped again");
+    check(!dedupe.Redundant(memory), "a memory call is never skipped");
+    check(!dedupe.Redundant(resolve(0x1000, 1)), "a repeat after a memory call is executed");
+    check(dedupe.Skipped() == 2, "two skipped");
+}
+
+// writeDump's chunked write: every byte, in order, with several calls.
+void testDumpChunks() {
+    std::vector<std::byte> bytes(10000);
+    for (std::size_t index = 0; index < bytes.size(); ++index) bytes[index] = static_cast<std::byte>(index * 7u);
+    std::ostringstream file(std::ios::binary);
+    check(writeChunked(file, bytes.data(), bytes.size(), 4096), "chunked write failed");
+    const auto written = file.str();
+    check(written.size() == bytes.size() && std::memcmp(written.data(), bytes.data(), bytes.size()) == 0, "chunked write changed the bytes");
+    std::ostringstream empty(std::ios::binary);
+    check(writeChunked(empty, bytes.data(), 0, 4096) && empty.str().empty(), "an empty dump wrote bytes");
 }
 
 int main(int argc, char** argv) {
@@ -336,8 +514,16 @@ int main(int argc, char** argv) {
         else if (mode == "host_neighbors") testHostNeighbors(directory);
         else if (mode == "unwatched") testUnwatched();
         else if (mode == "tokens") testEopTokens();
+        else if (mode == "dump_chunks") testDumpChunks();
+        else if (mode == "dedupe") testPrologueDedupe();
+        else if (mode == "host_collisions") testHostCollisions(directory);
         else if (mode == "blocking") testBlockingSubmission(directory);
         else if (mode == "shader" || mode == "shader_host") testShaderCode(directory, mode == "shader_host");
+        else if (mode == "shader_prologue") testPrologueHeader(directory);
+        else if (mode == "shader_checkpoint") testCheckpoint(directory);
+#ifdef _WIN32
+        else if (mode == "shader_aliases") testAliasedPages(directory);
+#endif
         else throw std::runtime_error("unknown test");
         AgcDriverShutdown_nid_postfix();
         std::puts("frame replay state test passed");

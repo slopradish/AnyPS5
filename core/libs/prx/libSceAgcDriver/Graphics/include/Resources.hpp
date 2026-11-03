@@ -2,6 +2,7 @@
 #define CORE_LIBS_PRX_LIBSCEAGCDRIVER_GRAPHICS_INCLUDE_RESOURCES_HPP
 
 #include "prx/libSceAgcDriver/Graphics/include/State.hpp"
+#include "prx/libSceAgcDriver/Execution/include/MemoryStats.hpp"
 #include <span>
 
 namespace AgcDriver::Graphics {
@@ -15,6 +16,7 @@ public:
     static std::shared_ptr<Buffer> WithinDeviceLocalHeadroom(const Context& context, std::size_t size, VkBufferUsageFlags usage);
     VkBuffer Handle() const;
     VkDeviceAddress DeviceAddress() const;
+    VkMemoryPropertyFlags Properties() const { return properties; }
     // Host-visible buffers only: a device-local one (properties without HOST_VISIBLE, the staging
     // shadows of GuestBufferMemory) has no mapping and its bytes move by GPU copies alone.
     std::span<std::byte> Bytes();
@@ -41,6 +43,8 @@ private:
     VkBufferUsageFlags usage;
     VkMemoryPropertyFlags properties;
     std::shared_ptr<BufferPool> cache;
+    // APS5_MEM_STATS: this object's capacity, charged to the owner scope it was made in.
+    MemoryStats::LiveToken live;
 };
 
 // Device-local scratch memory for GPU-side layout conversion. The detiler reads and writes scattered
@@ -65,6 +69,7 @@ private:
     VkDeviceSize allocationBytes = 0;
     VkBufferUsageFlags usage;
     std::shared_ptr<BufferPool> cache;
+    MemoryStats::LiveToken live;
     bool hostPlaced = false;
     bool ready = false;
 };

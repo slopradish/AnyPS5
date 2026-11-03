@@ -51,6 +51,7 @@ enum class StageInputKind {
     RasterPrimitive,
     LayerExported,
     BaseInstance,
+    BaseVertex,
     BaryCoordSmoothCenter,
     BaryCoordNoPerspectiveCenter,
     BaryCoordSmoothSample,

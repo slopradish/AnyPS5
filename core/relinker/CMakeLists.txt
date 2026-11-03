@@ -930,6 +930,8 @@ if(BUILD_TESTING)
         add_test(NAME windows_import_modules COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/relinker/tests/test_windows_import_modules.py
             $<TARGET_FILE:relinker> ${windows_stdio_host_arguments})
+        add_test(NAME import_library_identity COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/relinker/tests/test_import_library_identity.py $<TARGET_FILE:relinker>)
         if(WIN32)
             foreach(kernelVariant IN ITEMS sys web)
                 add_test(NAME windows_kernel_variant_${kernelVariant} COMMAND ${Python3_EXECUTABLE}
