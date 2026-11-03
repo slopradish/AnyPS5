@@ -25,10 +25,11 @@
 - [sk_new, sk_push and sk_free](../../../core/libs/prx/libSceLibreSsl3/src/Stack.cpp) (libSceLibreSsl3) - follow [LibreSSL 4.0.0](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/stack/stack.c) `stack.c` with libSceLibreSsl's 32-byte `_STACK` layout, which `stack_local.h` keeps there. Stacks and element arrays come from the guest heap, so the forwarded `sk_pop_free` can release them. Nothing is checked on the console. Where LibreSSL faults or overflows, they throw: `sk_push` on a null stack, on a negative element count, on a null element array it does not regrow, or when the element array cannot double without overflowing `int`
 
 - [ASN1_TIME_diff](../../../core/libs/prx/libSceLibreSsl3/src/Time.cpp) has no console ABI or behavior verification. Its signature and date rules follow LibreSSL 4.0.0 [a_time.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time.c), [a_time_tm.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time_tm.c) and [a_time_posix.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time_posix.c), using the existing 24-byte string layout. Null inputs use the host wall clock; the console clock relationship is unverified. Null output pointers throw after valid input parsing, where the reference dereferences them. Closes when: measured on a PS5.
+- [OPENSSL_init_ssl](../../../core/libs/prx/libSceLibreSsl3/src/InitSsl.cpp) (libSceLibreSsl3) - nothing is checked on the console. [LibreSSL 4.0.0](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libssl/ssl_init.c#L36-L52) `ssl_init.c` returns 1 whatever `OPENSSL_init_crypto` returns; the string loaders it runs are empty in the [firmware 13.42 module](https://github.com/boykopovar/AnyPS5/pull/9535#issuecomment-6407060914). The configuration is settled once, as `crypto_init.c` and `conf_sap.c` do: `OPENSSL_INIT_NO_LOAD_CONFIG` settles it without loading, and a later `OPENSSL_INIT_LOAD_CONFIG` is a no-op. `OPENSSL_INIT_LOAD_CONFIG` before that, which loads the console's configuration file, throws `NotImplemented_nid_no_patch`. `OPENSSL_cpuid_setup` has no visible effect and is not modelled. Closes when: compared with the console.
 
 ### Additional callable export inventory
 
-- [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 175 callable exports: 165 named and 10 known only by NID. Every entry throws. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. No functional implementation or title unblock is claimed.
+- [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 174 callable exports: 164 named and 10 known only by NID. Every entry throws. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. No functional implementation or title unblock is claimed.
 
 | Name | NID |
 | --- | --- |
@@ -155,7 +156,6 @@
 | `ASN1_STRING_set` | `gavhu7SX2FI` |
 | `PEM_read_bio_PUBKEY` | `gn7mRF71J4k` |
 | `EVP_PKEY_assign` | `gp5dGS14-pI` |
-| `OPENSSL_init_ssl` | `hGiyDq-l4AE` |
 | `i2d_PKCS8_PRIV_KEY_INFO` | `iFlkTGEbE9k` |
 | `BN_div` | `iHetf873n+4` |
 | `X509_CRL_get_ext_d2i` | `je-ydGAbgFg` |
