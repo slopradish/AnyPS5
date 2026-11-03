@@ -282,6 +282,12 @@ static void CheckNullArguments() {
     Require(sceSaveDataDirNameSearch2(&cond, nullptr) == SaveDataErrorParameter, "null result returns PARAMETER in sceSaveDataDirNameSearch2");
     cond.order = 2;
     Require(sceSaveDataDirNameSearch2(&cond, &result) == SaveDataErrorParameter, "invalid order must be rejected in sceSaveDataDirNameSearch2");
+    char unterminatedPattern[sizeof(SceSaveDataDirName::data)];
+    std::memset(unterminatedPattern, 'x', sizeof(unterminatedPattern));
+    cond.dir_name = reinterpret_cast<const SceSaveDataDirName*>(unterminatedPattern);
+    cond.order = 0;
+    Require(sceSaveDataDirNameSearch(&cond, &result) == SaveDataErrorParameter, "unterminated pattern returns PARAMETER in sceSaveDataDirNameSearch");
+    Require(sceSaveDataDirNameSearch2(&cond, &result) == SaveDataErrorParameter, "unterminated pattern returns PARAMETER in sceSaveDataDirNameSearch2");
     Require(sceSaveDataGetConvertProgress(nullptr) == SaveDataErrorParameter, "null progress returns PARAMETER in sceSaveDataGetConvertProgress");
     float progress = 0.0f;
     Require(sceSaveDataGetConvertProgress(&progress) == -2137063423, "uninitialized convert progress returns NOT_INITIALIZED");
