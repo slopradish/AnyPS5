@@ -21,7 +21,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | 5 | Bind misaligned draw buffer regions in place | legacy `f83abf2a7e` | ported (`3dccf1ef54`) |
 | 6 | Skip zero-filling sampled texture snapshots | legacy `fef87ce8f6` | ported (`6df1db86db`) |
 | 7 | Guard the reported wait-timeout set against concurrent queues | legacy `3cb2fc3694` | already in tree |
-| 8 | Prove storage image refreshes over other pending images | sp4c3b4r8 `88d7bb6211` | needs porting; needs `Texture.hpp`/`Texture.cpp` refresh rework |
+| 8 | Prove storage image refreshes over other pending images | sp4c3b4r8 `88d7bb6211` | ported (`d7ffbea029`): `RefreshProof` records the overlapping pending images and proves them unchanged |
 
 ## GPU hang (Wolverine)
 
