@@ -738,10 +738,18 @@ private:
     mutable DccRangeProof targetKeyProof;
     DccSingleProof singleProof;
     struct RefreshProof {
+        struct Other {
+            std::weak_ptr<StorageTexture> texture;
+            std::uint64_t version = 0;
+            DccKeys keys = DccKeys::Uncompressed;
+            bool cached = false;
+        };
         std::uint64_t generation = 0;
         std::uint64_t pendingSerial = 0;
         std::uint64_t keyGeneration = 0;
         DccKeys keys = DccKeys::Uncompressed;
+        std::array<Other, 4> others{};
+        std::uint8_t otherCount = 0;
     };
     RefreshProof refreshProof;
     struct ForeignKeyProof {
