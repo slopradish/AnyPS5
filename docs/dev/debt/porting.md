@@ -12,7 +12,7 @@ Every entry below is a fix present in a fork or pre-sync branch but **not** in `
 | 4 | Release sampled texture host copies under host pressure | dean/astrobot `93faece10b` | `Graphics/src/Texture.cpp` or `ShaderMemory.cpp` | Not ported |
 | 5 | Bind misaligned draw buffer regions in place | dean/astrobot `f83abf2a7e` | `Graphics/src/Draw.cpp` | Not ported |
 | 6 | Skip zero-filling sampled texture snapshots | dean/astrobot `fef87ce8f6` | `Graphics/src/ShaderResources.cpp` | **Ported** (`6df1db86db`) |
-| 7 | Guard wait-timeout set against concurrent queues | dean/astrobot `3cb2fc3694` | `Graphics/src/Recorder.cpp` | Not ported |
+| 7 | Guard wait-timeout set against concurrent queues | dean/astrobot `3cb2fc3694` | `Execution/src/Driver/Synchronization/WaitMemory.cpp` | Already in tree |
 | 8 | Prove storage image refreshes over other pending images | sp4c3b4r8 `88d7bb6211` | `Graphics/src/Texture.cpp` or `GuestTextureResource.cpp` | Not ported |
 
 ## GPU hang (Wolverine)
