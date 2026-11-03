@@ -1176,7 +1176,8 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
             if (dataSelect == 0 || destination == 0) return;
             std::uint64_t value = address(packet[5], packet[6]);
             if (dataSelect == 3) {
-                value = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() / 10);
+                require(!ExactGpuTimestamps(), "a RELEASE_MEM GPU timestamp is stored by the driver on the GPU");
+                value = GpuTimestamp();
             }
             GuestMemory::Write(destination, std::as_bytes(std::span(&value, 1)).first(dataSelect == 1 ? 4 : 8), dataSelect == 1 ? 4 : 8);
             return;
@@ -1273,6 +1274,55 @@ StateEffect PacketStateEffect(std::uint32_t header) {
             return StateEffect::None;
         default: return StateEffect::Unknown;
     }
+}
+
+std::uint32_t ParseGpuTimestampScale(const char* value) {
+    if (value == nullptr) return 100;
+    char* end = nullptr;
+    const auto parsed = std::strtoul(value, &end, 10);
+    require(end != value && *end == '\0' && parsed >= 1 && parsed <= 1000, "APS5_GPU_TIMESTAMP_SCALE must be a percentage between 1 and 1000");
+    return static_cast<std::uint32_t>(parsed);
+}
+
+std::uint64_t ScaleGpuClockNs(std::uint64_t nowNs, std::uint64_t originNs, std::uint32_t percent) {
+    require(nowNs >= originNs, "GPU clock went backwards");
+    const auto elapsed = nowNs - originNs;
+    return originNs + elapsed / 100 * percent + elapsed % 100 * percent / 100;
+}
+
+std::uint64_t GpuTimestamp() {
+    static const std::uint32_t percent = ParseGpuTimestampScale(std::getenv("APS5_GPU_TIMESTAMP_SCALE"));
+    const auto nowNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (percent == 100) return nowNs / 10;
+    static const std::uint64_t originNs = nowNs;
+    return ScaleGpuClockNs(nowNs, originNs, percent) / 10;
+}
+
+bool ExactGpuTimestamps() {
+    static const bool exact = std::getenv("APS5_DECODE_TIME_GPU_TIMESTAMPS") == nullptr;
+    return exact;
+}
+
+TimestampStage DecodeTimestampStage(std::uint32_t eventWord) {
+    const auto type = eventWord & 0x3fu;
+    switch ((eventWord >> 8u) & 0xfu) {
+        case 5: return TimestampStage::EndOfPipe;
+        case 6:
+            if (type == 0x2f) return TimestampStage::ComputeShaders;
+            if (type == 0x30) return TimestampStage::PixelShaders;
+            break;
+        default: break;
+    }
+    char message[96];
+    std::snprintf(message, sizeof(message), "RELEASE_MEM GPU timestamp for event 0x%x index %u is not implemented", type, (eventWord >> 8u) & 0xfu);
+    throw std::runtime_error(message);
+}
+
+std::optional<TimestampWrite> DecodeTimestampWrite(std::span<const std::uint32_t> packet) {
+    if (!ExactGpuTimestamps() || packet.size() < 7 || ((packet[0] >> 8u) & 0xffu) != 0x49 || (packet[2] >> 29u) != 3) return std::nullopt;
+    const auto destination = address(packet[3], packet[4]);
+    if (destination == 0) return std::nullopt;
+    return TimestampWrite{destination, 8, DecodeTimestampStage(packet[1])};
 }
 
 }

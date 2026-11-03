@@ -2826,6 +2826,19 @@ int VulkanDevice::WriteLabelOnGpu(std::uint64_t address, std::span<const std::by
     return 0;
 }
 
+int VulkanDevice::WriteTimestampOnGpu(std::uint64_t address, std::size_t bytes, Pm4::TimestampStage stage, std::uint32_t queue, bool reapFirst) {
+    if (state->recorder == nullptr) return 4;
+    if (bytes != 4 && bytes != 8) throw std::runtime_error("a GPU timestamp of 4 or 8 bytes");
+    auto& recorder = *state->recorder;
+    if (reapFirst && OpportunisticReap()) recorder.Reap();
+    const VkPipelineStageFlagBits pipelineStage = stage == Pm4::TimestampStage::ComputeShaders ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : stage == Pm4::TimestampStage::PixelShaders ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    const auto query = recorder.WriteTimestamp(pipelineStage);
+    recorder.Sync();
+    const auto value = recorder.ReadTimestamp(query);
+    GuestMemory::Write(address, std::as_bytes(std::span(&value, 1)).first(bytes), 4);
+    return 1;
+}
+
 bool VulkanDevice::AfterRecordedWork(std::function<void()> action, bool reapFirst) {
     if (!state->recorder) return false;
     if (reapFirst && OpportunisticReap()) state->recorder->Reap();

@@ -84,6 +84,17 @@ std::uint32_t ReadDrawCount(const DrawParameters::IndirectDraw& indirect);
 inline bool IndirectDrawOpcode(std::uint32_t opcode) { return opcode == 0x24 || opcode == 0x25 || opcode == 0x2c || opcode == 0x38; }
 inline bool DrawOpcode(std::uint32_t opcode) { return opcode == 0x27 || opcode == 0x2d || opcode == 0x35 || IndirectDrawOpcode(opcode); }
 
+enum class TimestampStage : std::uint8_t { EndOfPipe, ComputeShaders, PixelShaders };
+struct TimestampWrite {
+    std::uint64_t address;
+    std::size_t bytes;
+    TimestampStage stage;
+};
+bool ExactGpuTimestamps();
+std::uint64_t GpuTimestamp();
+TimestampStage DecodeTimestampStage(std::uint32_t eventWord);
+std::optional<TimestampWrite> DecodeTimestampWrite(std::span<const std::uint32_t> packet);
+
 std::string_view KnownName(std::uint32_t header);
 std::string Name(std::uint32_t header);
 // A PM4 type-2 packet is a one-dword filler (command-buffer padding); type 3 and type 0 carry a
