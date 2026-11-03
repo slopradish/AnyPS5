@@ -388,8 +388,15 @@ GuestTextureResource ArraySurfaceForTarget(const ColorTarget& color) {
 
 namespace {
 
+bool writesStencilTarget(const State& state) {
+    const auto keeps = [](const VkStencilOpState& face) {
+        return face.writeMask == 0u || (face.failOp == VK_STENCIL_OP_KEEP && face.passOp == VK_STENCIL_OP_KEEP && face.depthFailOp == VK_STENCIL_OP_KEEP);
+    };
+    return state.stencilTest && (!keeps(state.stencilFront) || !keeps(state.stencilBack));
+}
+
 bool writesDepthTarget(const State& state) {
-    return state.depthWrite || (state.stencilTest && (state.stencilFront.writeMask != 0u || state.stencilBack.writeMask != 0u));
+    return state.depthWrite || writesStencilTarget(state);
 }
 
 std::size_t colorKeyCount(const ColorTarget& color, std::size_t bytes) {
@@ -1594,7 +1601,7 @@ void requireDrawPlanRepeats(const Context& context, const State& state, const Pm
     Require(again.nothing == plan.nothing && again.indexBytes == plan.indexBytes && again.fragmentOutputs == plan.fragmentOutputs && again.shaderStages == plan.shaderStages && again.meshGroups == plan.meshGroups && again.meshLayers == plan.meshLayers && again.meshLayerStride == plan.meshLayerStride && again.keyed == plan.keyed && again.contentKey == plan.contentKey && std::ranges::equal(repeated.bindings, layout.bindings, sameBinding) && std::ranges::equal(repeated.attributes, layout.attributes, sameAttribute), "APS5_VERIFY_DRAW_PLAN: the plan built after the draw's record-time work differs from the plan the draw used");
 }
 
-DrawInputs prepareDrawInputs(const Context& context, const State& state, const Pm4::DrawParameters& draw, std::span<const CompiledShader> shaders, const DrawPlan& drawPlan, DrawTimer& timer) {
+DrawInputs prepareDrawInputs(const Context& context, const State& state, const Pm4::DrawParameters& draw, std::span<const CompiledShader> shaders, const DrawPlan& drawPlan, DrawTimer& timer, PerformanceTimer& timing) {
     DrawInputs inputs;
     inputs.indexBytes = drawPlan.indexBytes;
     inputs.fragmentOutputs = drawPlan.fragmentOutputs;
@@ -1614,6 +1621,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         Require(recorder == nullptr || !recorder->CountingSamples(), "a partial write of a packed color target merges inside the pixel shader after early depth and stencil tests, which a shader that kills pixels under late tests cannot use while occlusion queries count samples: the early tests would count the pixels it kills");
     }
     timer.phase(PhaseValidate);
+    timing.Mark("validate");
     inputs.maxIndex = draw.indexed ? 0u : draw.firstVertex + draw.indexCount - 1u;
     if (state.quadList || StripPatches(state, shaders)) {
         Require(!draw.indirect, state.quadList ? "indirect quad-list draw is unsupported" : "an indirect triangle strip through emulated barycentric patches is unsupported");
@@ -1712,7 +1720,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         const bool restartLeft = draw.indirect.has_value();
         auto highest = HighestDrawIndex(kept, draw.indexSize, restartLeft);
         constexpr std::uint32_t ZeroFetchSlack = 0x10000u;
-        if (const auto zeroFrom = highest ? ZeroFetchVertex(shaders.front().program->vertexAttributes) : std::nullopt) {
+        if (const auto zeroFrom = highest && !shaders.front().program->vertexAttributes.empty() ? ZeroFetchVertex(shaders.front().program->vertexAttributes) : std::nullopt) {
             const auto limit = *zeroFrom > draw.firstVertex ? *zeroFrom - draw.firstVertex : 0u;
             if (*highest >= limit && *highest - limit >= ZeroFetchSlack) highest = ClampDrawIndices(kept, draw.indexSize, restartLeft, limit);
         }
@@ -1752,7 +1760,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
             return inputs;
         }
         constexpr std::uint32_t ZeroFetchSlack = 0x10000u;
-        if (const auto zeroFrom = state.stages.mesh ? std::nullopt : ZeroFetchVertex(shaders.front().program->vertexAttributes)) {
+        if (const auto zeroFrom = state.stages.mesh || shaders.front().program->vertexAttributes.empty() ? std::nullopt : ZeroFetchVertex(shaders.front().program->vertexAttributes)) {
             const auto limit = *zeroFrom > draw.firstVertex ? *zeroFrom - draw.firstVertex : 0u;
             if (*highest >= limit && *highest - limit >= ZeroFetchSlack) {
                 GuestMemory::FlushGpuWrites(draw.indexAddress, static_cast<std::size_t>(indexBytes));
@@ -1786,6 +1794,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         }
     }
     APS5_LOG_CHARS_OUT_DEBUG("Index validation OK");
+    timing.Mark("index_upload");
     const auto& attributes = shaders.front().program->vertexAttributes;
     inputs.vertexOffsets.assign(attributes.size(), 0);
     inputs.vertexHandles.reserve(attributes.size());
@@ -1882,6 +1891,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         inputs.vertexOffsets[i] = rangeOffsets[plan.copyOf[j]] + plan.offsets[j];
     }
     timer.phase(PhaseVertex);
+    timing.Mark("vertex_upload");
     return inputs;
 }
 
@@ -2999,15 +3009,13 @@ bool prepareDraw(const Context& context, const State& state, const Pm4::DrawPara
     auto& inputs = prepared.inputs;
     const auto plan = planDraw(context, state, draw, shaders, nullptr, outcome, timer);
     if (plan.nothing) return false;
-    inputs = prepareDrawInputs(context, state, draw, shaders, plan, timer);
+    inputs = prepareDrawInputs(context, state, draw, shaders, plan, timer, timing);
     if (inputs.nothing) {
         if (VerifyDrawPlan()) requireDrawPlanRepeats(context, state, draw, shaders, plan);
         return false;
     }
     const auto* args = prepared.args = draw.indirect ? &*draw.indirect : nullptr;
     const auto indexBytes = inputs.indexBytes;
-    timing.Mark("validate");
-    timing.Mark("index_upload");
     const int dumpLimit = prepared.dumpLimit = DumpTargetLimit();
     auto& targets = prepared.targets;
     targets.resize(state.colors.size());
@@ -3132,7 +3140,7 @@ bool prepareDraw(const Context& context, const State& state, const Pm4::DrawPara
         targetViews.push_back(binding.target->View());
     }
     if (state.depth) {
-        targetViews.push_back(DepthSurfaceView(context, *state.depth, state.depthWrite, state.stencilTest));
+        targetViews.push_back(DepthSurfaceViewWithStencilWriteIntent(context, *state.depth, state.depthWrite, state.stencilTest, writesStencilTarget(state)));
         if (writesDepthTarget(state)) NoteDepthSurfaceWrite(context, *state.depth);
     }
     timer.phase(PhasePrepare);
@@ -3882,7 +3890,7 @@ DrawRecipeOutcome DrawWithRecipe(const Context& context, const State& state, con
     const auto plan = planDraw(context, state, draw, shaders, &recipe, outcome, timer);
     DrawInputs inputs;
     if (plan.nothing) inputs.nothing = true;
-    else inputs = prepareDrawInputs(context, state, draw, shaders, plan, timer);
+    else inputs = prepareDrawInputs(context, state, draw, shaders, plan, timer, timing);
     if (inputs.nothing) {
         result.recorded = true;
         return result;
@@ -3911,7 +3919,7 @@ DrawRecipeOutcome DrawWithRecipe(const Context& context, const State& state, con
     }
     if (recipe.hasDepth) {
         timer.phase(PhaseSetup);
-        const auto depthView = DepthSurfaceView(context, *state.depth, state.depthWrite, state.stencilTest);
+        const auto depthView = DepthSurfaceViewWithStencilWriteIntent(context, *state.depth, state.depthWrite, state.stencilTest, writesStencilTarget(state));
         if (writesDepthTarget(state)) NoteDepthSurfaceWrite(context, *state.depth);
         timer.phase(PhaseReadTarget);
         if (recipe.targetViews.back() != depthView) return miss(DrawRecipeMiss::TargetGone);
