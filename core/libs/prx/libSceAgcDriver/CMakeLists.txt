@@ -156,6 +156,19 @@ add_custom_command(
         VERBATIM
 )
 
+set(agcGpuTimestampsShaderSource ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/shaders/GpuTimestamps.comp)
+set(agcGpuTimestampsShaderSpv ${agcTextureDetileGeneratedDir}/GpuTimestamps.spv)
+set(agcGpuTimestampsShaderHeader ${agcTextureDetileGeneratedDir}/GpuTimestamps_spv.h)
+add_custom_command(
+        OUTPUT "${agcGpuTimestampsShaderHeader}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${agcTextureDetileGeneratedDir}"
+        COMMAND "$<TARGET_FILE:glslang-standalone>" -V --target-env vulkan1.1 -o "${agcGpuTimestampsShaderSpv}" "${agcGpuTimestampsShaderSource}"
+        COMMAND ${CMAKE_COMMAND} -DINPUT=${agcGpuTimestampsShaderSpv} -DOUTPUT=${agcGpuTimestampsShaderHeader}
+        -DSYMBOL=GPU_TIMESTAMPS_SPV -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_spirv.cmake"
+        DEPENDS "${agcGpuTimestampsShaderSource}" glslang-standalone
+        VERBATIM
+)
+
 set(agcStagingCopyBackShaderSource ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/shaders/StagingCopyBack.comp)
 set(agcStagingCopyBackShaderSpv ${agcTextureDetileGeneratedDir}/StagingCopyBack.spv)
 set(agcStagingCopyBackShaderHeader ${agcTextureDetileGeneratedDir}/StagingCopyBack_spv.h)
@@ -334,9 +347,12 @@ set(agcDriverSources
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawRegisterKey.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawRelocate.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawTiming.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawAhead.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/DrawPrepare.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Draw/IndirectDraw.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/EntryPoints.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Lifecycle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/LocalMemoryProbe.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Memory/BufferCopy.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Memory/BufferFill.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Driver/Memory/CaptureDiagnostics.cpp
@@ -390,6 +406,10 @@ set(agcDriverSources
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/PadStatusOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Execution/src/Screenshot.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/Draw.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/DepthTarget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/StorageAlias.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/TextureResidency.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/GpuClock.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/DepthSurface.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/MultisampleTarget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Graphics/src/FirstSampleCopy.cpp
@@ -438,6 +458,7 @@ set(agcDriverSources
         ${agcMultisampleUploadHeader}
         ${agcCmaskClearShaderHeader}
         ${agcMeshArgumentsShaderHeader}
+        ${agcGpuTimestampsShaderHeader}
         ${agcStagingCopyBackShaderHeader}
         ${agcTextureDetileImageShaderHeader}
         ${agcTextureRepackShaderHeader}
