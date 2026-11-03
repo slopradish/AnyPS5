@@ -161,6 +161,8 @@ static bool openDevice(Port& port) {
         return false;
     }
     port.spec = obtained;
+    static const bool trace = std::getenv("APS5_TRACE_AUDIOOUT") != nullptr;
+    if (trace) std::fprintf(stderr, "[audioout] device %u: requested %d Hz %d ch fmt %d, obtained %d Hz %d ch fmt %d\n", port.device, desired.freq, desired.channels, static_cast<int>(desired.format), obtained.freq, obtained.channels, static_cast<int>(obtained.format));
     SDL_PauseAudioDevice(port.device, 0);
     return true;
 }

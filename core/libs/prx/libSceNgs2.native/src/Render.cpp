@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <numbers>
@@ -602,6 +604,12 @@ void Ngs2RenderSilence(const Ngs2System& system, const Ngs2RenderBufferInfo* buf
 void Ngs2RenderSystem(Ngs2System& system, const Ngs2RenderBufferInfo* bufferInfo, std::uint32_t numBufferInfo) {
     const auto grain = system.option.num_grain_samples;
     const auto outputBytes = OutputBytes(system, bufferInfo, numBufferInfo);
+    static const bool traceOutput = std::getenv("APS5_TRACE_NGS2_OUTPUT") != nullptr;
+    if (traceOutput) {
+        std::fprintf(stderr, "[ngs2] render rate=%u grain=%u outputs=%u", system.option.sample_rate, grain, numBufferInfo);
+        for (std::uint32_t i = 0; i < numBufferInfo; ++i) std::fprintf(stderr, " out%u=(ch=%u type=%u bytes=%zu)", i, bufferInfo[i].num_channels, static_cast<unsigned>(bufferInfo[i].waveform_type), outputBytes[i]);
+        std::fprintf(stderr, "\n");
+    }
     std::vector<Ngs2Voice*> voices;
     for (auto* rack : system.racks) {
         for (auto& voice : rack->voices) {
