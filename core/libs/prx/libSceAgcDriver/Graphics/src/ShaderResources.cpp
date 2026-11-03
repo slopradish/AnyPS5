@@ -170,6 +170,11 @@ bool RawTextureSnapshots() {
     static const bool enabled = std::getenv("APS5_NO_RAW_TEXTURE_SNAPSHOTS") == nullptr;
     return enabled;
 }
+
+bool HostCopyRelease() {
+    static const bool enabled = std::getenv("APS5_NO_TEXTURE_HOST_RELEASE") == nullptr;
+    return enabled;
+}
 SnapshotBytes MakeSnapshotBytes(std::size_t size, bool readCovers) {
     SnapshotBytes bytes(size);
     if (!(readCovers && RawTextureSnapshots()) && size != 0) std::memset(bytes.data(), 0, size);
