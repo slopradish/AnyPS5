@@ -2057,14 +2057,14 @@ bool SpecializedStored(std::span<const std::byte> key) {
     auto& instance = store();
     if (!instance.Enabled()) return false;
     std::error_code error;
-    return std::filesystem::is_regular_file(instance.Directory() / EntryName(key), error);
+    return std::filesystem::is_regular_file(instance.Directory() / "specialized" / EntryName(key), error);
 }
 
 bool LoadSpecialized(std::span<const std::byte> key, StoredSpecialization& module) {
     auto& instance = store();
     if (!instance.Enabled()) return false;
     std::vector<std::byte> file;
-    if (!ReadWholeFile(instance.Directory() / EntryName(key), file)) return false;
+    if (!ReadWholeFile(instance.Directory() / "specialized" / EntryName(key), file)) return false;
     std::span<const std::byte> payload;
     if (unwrapEntry(file, key, payload) != LoadStatus::Loaded) return false;
     Reader reader(payload);
@@ -2084,6 +2084,9 @@ bool LoadSpecialized(std::span<const std::byte> key, StoredSpecialization& modul
 void StoreSpecialized(std::span<const std::byte> key, const StoredSpecialization& module) {
     auto& instance = store();
     if (!instance.Enabled()) return;
+    const auto directory = instance.Directory() / "specialized";
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
     std::vector<std::byte> payload;
     Writer writer(payload);
     writer.Value(static_cast<std::uint64_t>(0x53504543u));
@@ -2095,7 +2098,20 @@ void StoreSpecialized(std::span<const std::byte> key, const StoredSpecialization
     writer.Value(module.hashHigh);
     writer.Values(std::span<const std::uint32_t>(module.spirv));
     const auto file = wrapEntry(key, payload);
-    static_cast<void>(WriteFileAtomically(instance.Directory() / EntryName(key), file));
+    if (!WriteFileAtomically(directory / EntryName(key), file)) return;
+    static const std::size_t cap = [] {
+        const char* text = std::getenv("APS5_SPECIALIZED_DISK_CACHE_ENTRIES");
+        const auto parsed = text != nullptr ? std::strtoull(text, nullptr, 10) : 0ull;
+        return parsed != 0 ? static_cast<std::size_t>(parsed) : std::size_t{65536};
+    }();
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
+    for (auto it = std::filesystem::directory_iterator(directory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error)) {
+        if (!it->is_regular_file(error)) continue;
+        files.emplace_back(it->last_write_time(error), it->path());
+    }
+    if (files.size() <= cap) return;
+    std::sort(files.begin(), files.end());
+    for (std::size_t index = 0; index + cap < files.size(); ++index) std::filesystem::remove(files[index].second, error);
 }
 
 std::shared_ptr<const CompiledVariant> Persist(std::span<const std::byte> key, const CompiledVariant& variant) {

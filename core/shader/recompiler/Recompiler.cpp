@@ -1211,7 +1211,7 @@ SpecializedSpirv specializeModule(const CompiledShaderArtifact& artifact, std::s
                 stored.hashLow = entry->module->hash.low;
                 stored.hashHigh = entry->module->hash.high;
                 stored.spirv = built.Copy();
-                ShaderDiskCache::StoreSpecialized(diskKey, stored);
+                SubmitSpecialization([diskKey = std::move(diskKey), stored = std::move(stored)]() { ShaderDiskCache::StoreSpecialized(diskKey, stored); });
             }
         } catch (...) {
             entry->failure = std::current_exception();
