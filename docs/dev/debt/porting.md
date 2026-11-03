@@ -30,7 +30,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | 9 | First-use shader and texture work off the queue-0 draw path | biladeiro `0b4545d8b3` | partial: the specialization deferral (`b3b837f9d5`) and the registration-time skip (`533d933b4c`, `APS5_DEFER_REGISTERED_DRAWS`/`APS5_REGISTERED_SKIP_MS`) are ported; the heap scan bound remains |
 | 10 | Skip-listed dispatches return early instead of throwing | biladeiro `a15541ace1` | already in tree: `SkippedShader` returns before the shader is prepared (`APS5_SKIP_SHADER` / `APS5_SKIP_SHADER_FILE`); only the hash-list form differs |
 | 11 | Batch cap 256 recorded draws/dispatches | biladeiro `0e47407146` | ported (`f931bbf018`) |
-| 12 | Fewer black frames and hitches from first-use work | biladeiro `8508ebf053` | partial: pipeline-cache save interval and texture-creation log gating are in; `SpecializedStored`, `APS5_REGISTERED_SKIP_MS` and the `firstSkip` bound need the first-use subsystem |
+| 12 | Fewer black frames and hitches from first-use work | biladeiro `8508ebf053` | partial: pipeline-cache save interval, texture-log gating, the specialized disk cache (`1096fb568e`) and the registration-time skip (`533d933b4c`) are in; the heap scan bound remains |
 
 ## Shader (Potter PS5)
 
@@ -75,7 +75,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | FSR swapchain teardown order | Kyty `5b48933306` | not applicable: no FSR path in this tree |
 | Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | superseded: upstream `DepthSurface`/`DepthSurface.cpp` already keeps depth GPU-resident (HTILE, slices, sampling, guards) |
 | StorageAlias wiring | legacy `4d29e7e9fb` | pending: call `AliasBlockCopies` from `writeBackLayers` |
-| DrawAhead/PreparedDraw | legacy `f4...`/`0c...` | blocked: needs legacy `Pm4::StateEffect`/`ApplyRegisterPairs` and `Driver` pipeline declarations |
+| DrawAhead/PreparedDraw | legacy | partial: `Pm4::StateEffect`/`ReadRegisterPairs`/`ApplyRegisterPairs` ported (`9bcb13c466`); the module needs the legacy `Driver` front-end declarations and draw-path call sites |
 | SpirvWaveExchange | legacy | superseded: upstream `spannedWaves` is the maintained equivalent |
 | NggPassthrough | legacy | ported (`ffe1235e97`): `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers`, analysis module |
 
