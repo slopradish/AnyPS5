@@ -16,7 +16,7 @@ namespace AgcDriver::Graphics {
 
 class PipelineCache {
 public:
-    static constexpr int SaveIntervalSeconds = 10;
+    static constexpr int SaveIntervalSeconds = 120;
 
     PipelineCache(const Context& context, const VkPhysicalDeviceProperties& properties, bool loadFromFile = true);
     ~PipelineCache();
