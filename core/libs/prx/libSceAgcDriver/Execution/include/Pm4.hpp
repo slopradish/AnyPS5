@@ -94,6 +94,11 @@ std::string_view UnsupportedReason(std::uint32_t header);
 void Validate(std::span<const std::uint32_t> packet, std::uint32_t queue);
 void Execute(std::span<const std::uint32_t> packet, QueueState& queue);
 inline bool IndirectRegisterOpcode(std::uint32_t opcode) { return opcode == 0x63 || opcode == 0x64 || opcode == 0x9f; }
+inline bool RegisterLoadOpcode(std::uint32_t opcode) { return IndirectRegisterOpcode(opcode); }
+enum class StateEffect : std::uint8_t { None, Registers, Loads, Unknown };
+StateEffect PacketStateEffect(std::uint32_t header);
+std::vector<std::uint32_t> ReadRegisterPairs(std::span<const std::uint32_t> packet);
+void ApplyRegisterPairs(std::span<const std::uint32_t> packet, QueueState& queue, std::span<const std::uint32_t> pairs);
 std::vector<std::uint32_t> ReadIndirectRegisters(std::span<const std::uint32_t> packet);
 bool IndirectRegistersValid(std::span<const std::uint32_t> pairs);
 void ExecuteIndirectRegisters(std::span<const std::uint32_t> packet, std::span<const std::uint32_t> pairs, QueueState& queue, bool skipInvalid = false);
