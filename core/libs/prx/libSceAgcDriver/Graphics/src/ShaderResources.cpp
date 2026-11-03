@@ -577,6 +577,10 @@ void refreshForView(StorageTexture& source, const GuestTextureResource& resource
 
 std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, std::uint32_t mip, std::uint64_t guestBytes = 0, bool written = false, std::optional<std::pair<std::uint32_t, std::uint32_t>> layers = std::nullopt);
 
+std::uint64_t ChargedTextureBytes(std::uint64_t guestBytes, std::uint64_t allocationBytes) {
+    return allocationBytes != 0 ? allocationBytes : guestBytes;
+}
+
 std::uint64_t heldBytes(const StorageTexture& image) {
     return image.BudgetBytes();
 }
@@ -1167,7 +1171,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
         counters.fromStorage.fetch_add(1, std::memory_order_relaxed);
     } else if (clear) {
         entry.texture = createTexture(*context.detiler, resource, components, std::span<const std::byte>{}, false, layerRows, &*clear);
-        entry.accounted = entry.texture->AllocationBytes();
+        entry.accounted = ChargedTextureBytes(entry.accounted, entry.texture->AllocationBytes());
         counters.cleared.fetch_add(1, std::memory_order_relaxed);
     } else {
         // Snapshot before the upload so a write racing with it is caught by the next comparison.
@@ -1182,7 +1186,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
             std::fprintf(stderr, "[texture] 0x%llx %ux%u format %u tile %d: %zu of %zu sampled bytes nonzero\n", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<int>(resource.tileMode), nonzero, entry.bytes.size() / 64);
         }
         entry.texture = createTexture(*context.detiler, resource, components, entry.bytes, depthCompare, layerRows);
-        entry.accounted = entry.texture->AllocationBytes();
+        entry.accounted = ChargedTextureBytes(entry.accounted, entry.texture->AllocationBytes());
         constexpr std::size_t SnapshotCompareBytes = 256u << 10u;
         if (entry.bytes.size() > SnapshotCompareBytes && (entry.generation != 0 || entry.untracked[0] != 0)) parkSnapshot(cache, entry.bytes);
         counters.snapshots.fetch_add(1, std::memory_order_relaxed);
