@@ -29,6 +29,8 @@ int main() {
     ERR_load_crypto_strings_nid_postfix();
     for (const auto code : Codes) Require(ERR_lib_error_string_nid_postfix(code) == nullptr);
     for (const auto code : Codes) Require(ERR_func_error_string_nid_postfix(code) == nullptr);
+    for (const auto code : Codes) Require(ERR_reason_error_string_nid_postfix(code) == nullptr);
     for (std::uint64_t library = 0; library < 256; ++library) Require(ERR_lib_error_string_nid_postfix(Pack(library, 0, 0)) == nullptr);
     for (std::uint64_t function = 0; function < 0x1000; ++function) Require(ERR_func_error_string_nid_postfix(Pack(2, function, 0)) == nullptr);
+    for (std::uint64_t reason = 0; reason < 0x1000; ++reason) Require(ERR_reason_error_string_nid_postfix(Pack(13, 0xFFF, reason)) == nullptr);
 }
