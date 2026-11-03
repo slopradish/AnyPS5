@@ -176,7 +176,6 @@ Encoded encodeVop3(std::span<const std::uint32_t> code, std::uint32_t index, std
     if (index + 1 >= code.size()) throw std::out_of_range("truncated GCN VOP3 instruction");
     const auto word0 = code[index];
     const auto opcode = (word0 >> 17u) & 0x1ffu;
-    if (compareWritesExec(opcode)) unsupported("VOP3 v_cmpx (writes both the scalar destination and EXEC)", opcode, programCounter);
     if (const auto shift = reversedShift(opcode)) return encodeVop3Words(swapAbsolute(word0), swapSources(code[index + 1]), *shift, false);
     const auto mapped = mapOpcode(GcnTables::Vop3, opcode);
     if (!mapped) unsupported("VOP3", opcode, programCounter);
@@ -241,7 +240,6 @@ Encoded encodeVop1(std::span<const std::uint32_t> code, std::uint32_t index, std
 Encoded encodeVopc(std::span<const std::uint32_t> code, std::uint32_t index, std::uint32_t programCounter) {
     const auto word = code[index];
     const auto opcode = (word >> 17u) & 0xffu;
-    if (compareWritesExec(opcode)) unsupported("VOPC v_cmpx (writes both VCC and EXEC)", opcode, programCounter);
     const auto mapped = mapOpcode(GcnTables::Vopc, opcode);
     if (!mapped) unsupported("VOPC", opcode, programCounter);
     Encoded out;
