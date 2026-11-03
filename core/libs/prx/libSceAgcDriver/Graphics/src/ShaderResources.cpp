@@ -180,6 +180,8 @@ struct CachedTexture {
     TextureKey key;
     std::uint64_t address;
     SnapshotBytes bytes;
+    std::uint64_t snapshotSize = 0;
+    bool hostReleased = false;
     std::shared_ptr<Texture> texture;
     // A fast-cleared surface is cached as its clear texels; it stays valid while the keys are unchanged.
     DccKeys keys = DccKeys::Uncompressed;
@@ -1142,7 +1144,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
     const bool noSnapshot = source != nullptr || clear.has_value();
     if (noSnapshot) parkSnapshot(cache, recycled);
     else if (recycled.empty()) recycled = spareSnapshot(cache, bytes);
-    CachedTexture entry{key, address, noSnapshot ? SnapshotBytes{} : (recycled.empty() ? MakeSnapshotBytes(bytes, *keys == DccKeys::Uncompressed) : std::move(recycled)), nullptr, *keys, snapshotGeneration};
+    CachedTexture entry{key, address, noSnapshot ? SnapshotBytes{} : (recycled.empty() ? MakeSnapshotBytes(bytes, *keys == DccKeys::Uncompressed) : std::move(recycled)), 0, false, nullptr, *keys, snapshotGeneration};
     entry.committed = std::move(committed);
     entry.surfaceBytes = bytes;
     const auto createTexture = [&](auto&&... args) {
