@@ -188,7 +188,7 @@ int APS5_VABI EVP_PKEY_security_bits_nid_postfix();
 int APS5_VABI X509_check_akid_nid_postfix();
 int APS5_VABI SSL_set_quic_use_legacy_codepoint_nid_postfix();
 int APS5_VABI SSL_CTX_set_default_verify_paths_nid_postfix();
-int APS5_VABI ERR_lib_error_string_nid_postfix();
+const char* APS5_VABI ERR_lib_error_string_nid_postfix(std::uint64_t error);
 int APS5_VABI BIO_meth_set_ctrl_nid_postfix();
 int APS5_VABI Unknown_GjO5Ap3E_minus_t4_nid_no_patch();
 int APS5_VABI Unknown_HE_minus_vihq_minus_KKw_nid_no_patch();

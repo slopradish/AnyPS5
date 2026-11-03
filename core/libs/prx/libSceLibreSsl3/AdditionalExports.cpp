@@ -351,10 +351,6 @@ int APS5_VABI SSL_CTX_set_default_verify_paths_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI ERR_lib_error_string_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI BIO_meth_set_ctrl_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
