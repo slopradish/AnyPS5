@@ -29,7 +29,7 @@ Every entry below is a fix present in a fork or pre-sync branch but **not** in `
 | # | Fix | Source | Key files | Status |
 |---|-----|--------|-----------|--------|
 | 13 | Null T# binding as null image (TYPE 0/1) | upstream #5828 | `ResourceMaterializer.cpp`, `GuestTextureResource.cpp` | Already in tree |
-| 14 | Cube T# through DIM 2D as face 0 | upstream #5509 | `SpirvImageEmitter.cpp` or `ResourceMaterializer.cpp` | Unknown |
+| 14 | Cube T# through DIM 2D as face 0 | upstream #5509 | `SpirvImageEmitter.cpp`, `ResourceMaterializer.cpp` | Already in tree |
 | 15 | Prepared mode for compute shader descriptor format 20 (class 2, dim 1) | New issue | `ResourceMaterializer.cpp:TryRuntimeImageMode` | Not started |
 
 ## PS4
