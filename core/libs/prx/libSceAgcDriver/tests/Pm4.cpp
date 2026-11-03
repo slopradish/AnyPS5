@@ -158,6 +158,10 @@ void testRegisters() {
     check(state.userConfig.at(0x10) == 60, "uconfig index zero failed");
     execute(state, makePacket(0x7a, {0x20000243, 0x441}));
     check(state.indexType == 1 && state.userConfig.at(0x243) == 0x441, "indexed VGT_INDEX_TYPE write lost state");
+    execute(state, makePacket(0x2a, {0x400}));
+    check(state.indexType == 0, "INDEX_TYPE with the console's fixed bit 10 lost its index size");
+    execute(state, makePacket(0x2a, {0x401}));
+    check(state.indexType == 1, "INDEX_TYPE with the console's fixed bit 10 lost its 32-bit index size");
     execute(state, makePacket(0x7a, {0x10000242, 0x11}));
     check(state.userConfig.at(0x242) == 0x11, "indexed VGT_PRIMITIVE_TYPE write lost state");
     expectFailure([&] { execute(state, makePacket(0x7a, {0x10000010, 1})); }, "bank selection");
