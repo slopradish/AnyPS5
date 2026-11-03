@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -183,9 +184,24 @@ struct PreparedShaders : PreparedShaderState {
     std::exception_ptr failure;
     std::atomic<bool> demanded{false};
     bool pending = false;
+    std::chrono::steady_clock::time_point firstSkip{};
     std::vector<std::size_t> convertedSamples;
     std::vector<std::size_t> layerRowSamples;
 };
+
+struct ShaderNotReady : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+class DeferDrawPreparationScope {
+public:
+    DeferDrawPreparationScope();
+    ~DeferDrawPreparationScope();
+    DeferDrawPreparationScope(const DeferDrawPreparationScope&) = delete;
+    DeferDrawPreparationScope& operator=(const DeferDrawPreparationScope&) = delete;
+};
+
+[[nodiscard]] bool DeferringDrawPreparation();
 
 class SharedCode {
 public:
