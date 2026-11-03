@@ -73,6 +73,19 @@ void Store(std::vector<std::byte> key, std::shared_ptr<const CompiledVariant> va
 [[nodiscard]] bool LoadPlan(std::span<const std::byte> key, IrResourcePlan& plan);
 [[nodiscard]] std::shared_ptr<const IrResourcePlan> LoadSharedPlan(std::span<const std::byte> key, std::uint64_t shaderHash);
 void StorePlan(std::vector<std::byte> key, std::shared_ptr<const IrResourcePlan> plan);
+
+struct StoredSpecialization {
+    std::uint64_t specializationId = 0;
+    std::vector<std::uint64_t> specialization;
+    std::vector<std::uint32_t> bindings;
+    bool pushData = false;
+    std::uint64_t hashLow = 0;
+    std::uint64_t hashHigh = 0;
+    std::vector<std::uint32_t> spirv;
+};
+[[nodiscard]] bool SpecializedStored(std::span<const std::byte> key);
+[[nodiscard]] bool LoadSpecialized(std::span<const std::byte> key, StoredSpecialization& module);
+void StoreSpecialized(std::span<const std::byte> key, const StoredSpecialization& module);
 void Flush();
 void Shutdown();
 [[nodiscard]] unsigned Writers();
