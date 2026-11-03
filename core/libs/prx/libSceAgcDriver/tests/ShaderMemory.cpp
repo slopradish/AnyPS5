@@ -10406,6 +10406,18 @@ void verifyVolumeArrayLoadMode() {
     expectFailure([&] { static_cast<void>(ResourceMaterializer::RuntimeImageMode(store, descriptor, ResourceMaterializer::RuntimeImageModes(store))); }, "incompatible with the static runtime image interface", "2D-array image atomic on a 3D T# was accepted");
 }
 
+void verifyFlatVolumeLineMode() {
+    using namespace ShaderRecompiler;
+    ImageResource image{};
+    image.resourceClass = ImageResourceClass::Sampled;
+    image.dimension = RdnaImageDimension::Dim3D;
+    image.flatVolumeLineCompatible = false;
+    const auto modes = ResourceMaterializer::RuntimeImageModes(image);
+    const auto line = std::find_if(modes.begin(), modes.end(), [](const ImageResource& mode) { return mode.dimension == RdnaImageDimension::Dim1D && mode.numericClass == IrTextureNumericClass::Uint; });
+    require(line != modes.end(), "a 3D image did not prepare a 1D Uint runtime mode for a flat-volume descriptor");
+    require(std::any_of(modes.begin(), modes.end(), [](const ImageResource& mode) { return mode.dimension == RdnaImageDimension::Dim3D; }), "a 3D image stopped preparing its volume runtime mode");
+}
+
 void verifyMultisamplePlaneReadMode() {
     using namespace ShaderRecompiler;
     const DescriptorValue descriptor{{0x02754d00u, 0xc3800000u, 0x00cbc167u, 0xe1b20facu, 0u, 0x00700020u, 0u, 0u}, 8u};
@@ -10975,6 +10987,7 @@ int main(int argc, char** argv) {
         verifyCubeDepthCompareMode();
         verifyShortCubeMode();
         verifyVolumeArrayLoadMode();
+        verifyFlatVolumeLineMode();
         verifyArrayVolumeStoreMode();
         verifyMultisamplePlaneReadMode();
         verifyVolumeBiasTableRejection();
