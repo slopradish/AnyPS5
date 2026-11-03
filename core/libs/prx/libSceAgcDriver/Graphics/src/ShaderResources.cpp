@@ -14,6 +14,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/MemoryAccounting.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Pipeline.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/RuntimeSwitches.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Draw.hpp"
 #include <algorithm>
 #include <atomic>
@@ -176,6 +177,16 @@ bool RawTextureSnapshots() {
 bool HostCopyRelease() {
     static const bool enabled = std::getenv("APS5_NO_TEXTURE_HOST_RELEASE") == nullptr;
     return enabled;
+}
+
+std::size_t LargeResourceCacheEntries() {
+    static const std::size_t entries = [] {
+        if (!RuntimeSwitches::Set(RuntimeSwitch::ResourceCacheLarge)) return std::size_t{0};
+        const char* value = std::getenv("APS5_RESOURCE_CACHE_LARGE_ENTRIES");
+        const auto parsed = value != nullptr ? std::strtoull(value, nullptr, 10) : 0ull;
+        return parsed != 0 ? static_cast<std::size_t>(parsed) : std::size_t{4096};
+    }();
+    return entries;
 }
 
 std::uint64_t HostCopySoftLimit() {
@@ -4420,6 +4431,7 @@ void ResourceCache::Insert(const Key& key, std::shared_ptr<ShaderResources> reso
         const auto parsed = value ? std::strtoull(value, nullptr, 10) : 0ull;
         fixedCapacity = parsed != 0;
         capacity = fixedCapacity ? static_cast<std::size_t>(parsed) : baseEntries;
+        capacity = std::max(capacity, LargeResourceCacheEntries());
     }
     noteUse(key);
     while (entries.size() > capacity) {
@@ -4525,7 +4537,7 @@ void ResourceCache::Clear() {
 
 void ResourceCache::SetBase(std::size_t entries, std::size_t window) {
     std::lock_guard lock(mutex);
-    baseEntries = entries;
+    baseEntries = std::max(entries, LargeResourceCacheEntries());
     baseShrinkWindow = window;
 }
 
