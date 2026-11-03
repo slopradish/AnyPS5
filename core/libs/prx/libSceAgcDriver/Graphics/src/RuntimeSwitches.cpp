@@ -17,16 +17,93 @@ namespace {
 constexpr std::size_t SwitchCount = static_cast<std::size_t>(RuntimeSwitch::Count);
 
 constexpr std::array<const char*, SwitchCount> SwitchNames{
+    "APS5_NO_SPLIT_DRAW_BUILD",
+    "APS5_NO_BDA_STAGING",
+    "APS5_NO_DISPATCH_OVERLAP",
+    "APS5_NO_HTILE_GPU_EXPANSION",
+    "APS5_NO_GPU_INDIRECT_ARGS",
     "APS5_NO_BARRIER_BATCH",
+    "APS5_NO_EARLY_REVALIDATE",
+    "APS5_NO_BATCHED_STAGING",
+    "APS5_QUIET_PUBLISH",
+    "APS5_NO_STAGED_OVERLAP",
+    "APS5_NO_OWED_RUN_CLOSE",
+    "APS5_NO_RUN_ATOMIC_GUARD",
+    "APS5_DRAW_INPUTS_IN_PLACE",
+    "APS5_NO_RUN_STAGED_READ_GUARD",
+    "APS5_NO_SMALL_DEVICE_TIER",
+    "APS5_NO_EXACT_SIZE_REUSE",
+    "APS5_NO_HELD_READ_SKIP",
+    "APS5_NO_LANE_OPEN_SERIAL",
+    "APS5_NO_LANE_TEMPLATE_EDGE",
+    "APS5_LANE_SERIALIZE",
+    "APS5_NO_LANE_OVERLAP",
+    "APS5_NO_LANE_LABEL_SCOPE",
+    "APS5_NO_LANE_FORWARD_EDGE",
+    "APS5_NO_LANE_LEASE_WAIT",
+    "APS5_NO_IMAGE_SLABS",
+    "APS5_NO_PREPARED_TABLE_COUNT",
+    "APS5_NO_OVERLAP_RANGE_CHECK",
+    "APS5_NO_DRAW_AHEAD",
+    "APS5_NO_PRESENT_FRAME_AGE",
+    "APS5_NO_BDA_TEMPLATES",
+    "APS5_NO_SLICE_COPY",
+    "APS5_DEFER_REFRESH_FLUSH",
+    "APS5_NO_DEPTH_INDEX",
+    "APS5_NO_DEFERRED_DRAW_EVICTION",
+    "APS5_NO_INCREMENTAL_BDA_RANGES",
+    "APS5_NO_READ_ONLY_LEASE_SKIP",
+    "APS5_NO_LEAN_BDA_TABLES",
+    "APS5_NO_DEPTH_LOOKUP_FAST",
+    "APS5_NO_REFUSAL_MEMO",
+    "APS5_NO_DISTINCT_WRITE_SCANS",
+    "APS5_NO_COLLECT_HEAP",
+    "APS5_NO_LARGER_SMALL_POOLS",
+    "APS5_DEFER_FLIP_STORE",
+    "APS5_NO_DEFER_IMPORTED_STORES",
+    "APS5_FLUSH_WAIT_WHOLE_RANGE",
+    "APS5_NO_REFRESH_LOOKUP_CACHE",
+    "APS5_PIPELINE_DISPATCH",
+    "APS5_PIPELINE_DISPATCH_MISSES",
+    "APS5_NO_OWNED_PROOFS",
+    "APS5_NO_OWNED_PRIVATE",
+    "APS5_NO_HIT_ITEM_HTILE_NOTE",
+    "APS5_GPU_SOURCED_DRAW_BUFFERS",
+    "APS5_IMPORT_SOURCED_COPY_IN",
+    "APS5_NO_OWNED_DRAW_SNAPSHOTS",
+    "APS5_NO_GPU_SOURCE_AFTER_WRITER",
+    "APS5_NO_OWNED_VERTEX_INPUTS",
+    "APS5_NO_FLUSH_LANE_WAIT",
+    "APS5_NO_OWNED_EPOCH",
+    "APS5_NEW_PATH_NO_GPU_DRAWS",
+    "APS5_NEW_PATH_NO_GPU_DISPATCHES",
+    "APS5_NO_INDEX_CLAMP_MEMO",
+    "APS5_NO_GDS_GPU_FILL",
+    "APS5_NO_DMA_COPY_BEHIND_WRITES",
+    "APS5_NO_SLICE_EDGE_HASH",
+    "APS5_NO_CLEAR_SNAPSHOT_REUSE",
+    "APS5_NO_GPU_INDEX_CLAMP",
+    "APS5_NO_GPU_WRITTEN_IN_PLACE",
+    "APS5_NO_INCREMENTAL_SHADOW_COUNT",
+    "APS5_NO_GPU_SINGLE_EXPAND",
+    "APS5_NO_MOVED_IN_PLACE",
+    "APS5_NO_GPU_WRITTEN_INDEX_ESTIMATE",
+    "APS5_NO_LANE_OPEN_WAIT",
+    "APS5_NO_RESIDENT_RANGES",
+    "APS5_NO_PREPARED_DISPATCH_ITEMS",
+    "APS5_NO_BDA_DRAW_SPLIT",
+    "APS5_NO_BDA_DISPATCH_SPLIT",
+    "APS5_NO_DISPATCH_MISS_AHEAD",
+    "APS5_NO_WRITTEN_SHADOW_VRAM_GATE",
+    "APS5_DEFER_LABEL_READBACK",
+    "APS5_DISPATCH_CACHE_LARGE",
+    "APS5_RESOURCE_CACHE_LARGE",
 };
 
 struct SwitchValues {
     std::array<std::atomic<bool>, SwitchCount> set{};
     SwitchValues() {
-        const std::array<bool, SwitchCount> environment{
-            std::getenv("APS5_NO_BARRIER_BATCH") != nullptr,
-        };
-        for (std::size_t index = 0; index < SwitchCount; ++index) set[index].store(environment[index], std::memory_order_relaxed);
+        for (std::size_t index = 0; index < SwitchCount; ++index) set[index].store(std::getenv(SwitchNames[index]) != nullptr, std::memory_order_relaxed);
     }
 };
 
@@ -34,6 +111,8 @@ SwitchValues& Values() {
     static SwitchValues values;
     return values;
 }
+
+std::atomic<std::uint32_t> keySalt{0};
 
 std::string_view Trim(std::string_view text) {
     while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
@@ -76,6 +155,10 @@ std::optional<RuntimeSwitch> Find(std::string_view name) {
         if (name == SwitchNames[index]) return static_cast<RuntimeSwitch>(index);
     }
     return std::nullopt;
+}
+
+std::uint32_t KeySalt() {
+    return keySalt.load(std::memory_order_relaxed);
 }
 
 }
@@ -201,6 +284,7 @@ std::vector<std::string> AbAtPresent(std::uint64_t present, double seconds) {
             lines.emplace_back(text);
         }
         for (const auto id : config.switches) RuntimeSwitches::Assign(id, state.environment[static_cast<std::size_t>(id)] != step.b);
+        keySalt.store(static_cast<std::uint32_t>(step.phase + 1u), std::memory_order_relaxed);
         std::snprintf(text, sizeof(text), "[ab] phase %c %llu begins at present %llu (t %.3f s): %s\n", step.b ? 'B' : 'A', static_cast<unsigned long long>(step.phase), static_cast<unsigned long long>(present), seconds, SwitchSettings(state, step.b).c_str());
     } else {
         std::snprintf(text, sizeof(text), "[ab] phase %c %llu settled at present %llu (t %.3f s)\n", step.b ? 'B' : 'A', static_cast<unsigned long long>(step.phase), static_cast<unsigned long long>(present), seconds);
