@@ -67,6 +67,11 @@ void OwnedImage::Allocate(const Context& device, const VkMemoryAllocateInfo& all
 
 namespace {
 
+bool TextureCreationLog() {
+    static const bool enabled = std::getenv("APS5_TRACE_TEXTURE_CREATION") != nullptr;
+    return enabled;
+}
+
 Recorder* recorderFor(const Context& context) {
     auto* recorder = Recorder::Active();
     return recorder != nullptr && recorder->Device() == context.device ? recorder : nullptr;
@@ -923,7 +928,7 @@ Texture::Texture(const Context& context, const std::shared_ptr<StorageTexture>& 
         copyHeight = descriptor.height;
         copyLevels = descriptor.mipCount;
         copyLayers = geometry.imageLayers;
-        APS5_LOG_OUT("Texture address=0x%llx %ux%u mips=%u layers=%u sRGB copy of storage image (guest format %u)", static_cast<unsigned long long>(descriptor.baseAddress), descriptor.width, descriptor.height, descriptor.mipCount, copyLayers, descriptor.format);
+        APS5_LOG_OUT_IF(TextureCreationLog(), "Texture address=0x%llx %ux%u mips=%u layers=%u sRGB copy of storage image (guest format %u)", static_cast<unsigned long long>(descriptor.baseAddress), descriptor.width, descriptor.height, descriptor.mipCount, copyLayers, descriptor.format);
         auto expanded = CreateExpandImage(context, descriptor, 1u, copyLayers);
         image = expanded.image;
         owned = std::move(expanded.owned);
@@ -3183,9 +3188,9 @@ void StorageTexture::upload(const std::vector<bool>* layers) {
             toGeneral.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
             context.Function<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &toGeneral);
-            APS5_LOG_CHARS_OUT("StorageTexture upload submit");
+            APS5_LOG_CHARS_OUT_IF(TextureCreationLog(), "StorageTexture upload submit");
             batch.SubmitAndWait();
-            APS5_LOG_CHARS_OUT("StorageTexture upload done");
+            APS5_LOG_CHARS_OUT_IF(TextureCreationLog(), "StorageTexture upload done");
     }
     countStorageUpload(2, uploadedBytes);
     ++version;

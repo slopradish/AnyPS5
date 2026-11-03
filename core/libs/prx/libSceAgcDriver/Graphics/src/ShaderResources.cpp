@@ -1,5 +1,6 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
+#include "prx/libSceAgcDriver/Execution/include/PerformanceOverlay.hpp"
 #include "prx/libSceAgcDriver/Execution/include/CaptureTrace.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Mutex.hpp"
 #include "ThreadOwned.hpp"
@@ -175,6 +176,19 @@ bool HostCopyRelease() {
     static const bool enabled = std::getenv("APS5_NO_TEXTURE_HOST_RELEASE") == nullptr;
     return enabled;
 }
+
+std::uint64_t HostCopySoftLimit() {
+    static const std::uint64_t limit = [] {
+        if (const char* text = std::getenv("APS5_TEXTURE_HOST_MIB"); text != nullptr) {
+            const auto mib = std::strtoull(text, nullptr, 10);
+            if (mib != 0) return static_cast<std::uint64_t>(mib) << 20u;
+        }
+        const std::uint64_t cap = 6ull << 30u;
+        const auto physical = ReadPhysicalMemoryBytes();
+        return physical ? std::min(cap, *physical / 10u) : cap;
+    }();
+    return limit;
+}
 SnapshotBytes MakeSnapshotBytes(std::size_t size, bool readCovers) {
     SnapshotBytes bytes(size);
     if (!(readCovers && RawTextureSnapshots()) && size != 0) std::memset(bytes.data(), 0, size);
@@ -235,6 +249,7 @@ struct TextureCache {
     std::uint64_t reportedStorage = 0;
     std::chrono::steady_clock::time_point reportedAt{};
     std::uint64_t erasures = 0;
+    std::uint64_t hostReleasedPresent = 0;
 };
 
 TextureCache& Textures() {
@@ -500,6 +515,9 @@ struct TextureCounters {
     // by a byte compare.
     std::atomic<std::uint64_t> untrackedKept{0};
     std::atomic<std::uint64_t> untrackedCompared{0};
+    std::atomic<std::uint64_t> hostReleased{0};
+    std::atomic<std::uint64_t> hostReleasedBytes{0};
+    std::atomic<std::uint64_t> madeAfterRelease{0};
     std::atomic<std::int64_t> lastReport{0};
 };
 
@@ -518,7 +536,31 @@ void reportTextureCounters() {
     auto last = counters.lastReport.load();
     if (nowMs - last < 10000 || !counters.lastReport.compare_exchange_strong(last, nowMs)) return;
     const auto count = [](const std::atomic<std::uint64_t>& value) { return static_cast<unsigned long long>(value.load(std::memory_order_relaxed)); };
-    AgcDriver::ProfilePrint_nid_no_patch("[textures] sampled created: %llu from storage images, %llu cleared on the GPU, %llu snapshots (%llu snapshot reads over recorded writes inside cachedTexture, %llu storage-path fallbacks); stage-A records %llu: %llu fast hits, %llu full lookups; storage images %llu hits, %llu created, %llu own-object refreshes; image tables %llu reused, %llu resolved; untracked snapshots %llu kept by the write-watch hint, %llu compared\n", count(counters.fromStorage), count(counters.cleared), count(counters.snapshots), count(counters.pendingReads), count(counters.storageFallbacks), count(counters.records), count(counters.fastHits), count(counters.fastMisses), count(counters.storageHits), count(counters.storageCreated), count(counters.ownRefreshes), count(counters.tablesReused), count(counters.tablesResolved), count(counters.untrackedKept), count(counters.untrackedCompared));
+    AgcDriver::ProfilePrint_nid_no_patch("[textures] sampled created: %llu from storage images, %llu cleared on the GPU, %llu snapshots (%llu snapshot reads over recorded writes inside cachedTexture, %llu storage-path fallbacks); stage-A records %llu: %llu fast hits, %llu full lookups; storage images %llu hits, %llu created, %llu own-object refreshes; image tables %llu reused, %llu resolved; untracked snapshots %llu kept by the write-watch hint, %llu compared; host copies released %llu (%llu MiB), made after their host copy's release %llu\n", count(counters.fromStorage), count(counters.cleared), count(counters.snapshots), count(counters.pendingReads), count(counters.storageFallbacks), count(counters.records), count(counters.fastHits), count(counters.fastMisses), count(counters.storageHits), count(counters.storageCreated), count(counters.ownRefreshes), count(counters.tablesReused), count(counters.tablesResolved), count(counters.untrackedKept), count(counters.untrackedCompared), count(counters.hostReleased), count(counters.hostReleasedBytes) >> 20u, count(counters.madeAfterRelease));
+}
+
+void RunHostReleasePass(TextureCache& cache) {
+    if (!HostCopyRelease()) return;
+    const auto limit = HostCopySoftLimit();
+    std::uint64_t host = 0;
+    for (const auto& entry : cache.entries) host += entry.bytes.size();
+    if (host <= limit) return;
+    auto& counters = TextureCounts();
+    const auto present = Recorder::Presents();
+    std::uint64_t releasedBytes = 0;
+    std::size_t released = 0;
+    auto cursor = cache.entries.end();
+    while (cursor != cache.entries.begin() && host > limit) {
+        --cursor;
+        if (cursor->bytes.empty() || cursor->present >= present) continue;
+        host -= cursor->bytes.size();
+        releasedBytes += cursor->bytes.size();
+        SnapshotBytes{}.swap(cursor->bytes);
+        cursor->hostReleased = true;
+        ++released;
+    }
+    counters.hostReleased.fetch_add(released, std::memory_order_relaxed);
+    counters.hostReleasedBytes.fetch_add(releasedBytes, std::memory_order_relaxed);
 }
 
 // What the sampled-texture lookups on this thread proved their returned objects current against,
@@ -1093,6 +1135,10 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
     std::lock_guard lock(cache.mutex);
     const CacheHold held(sampledCacheHeld);
     dropUncachedViews(cache);
+    if (cache.hostReleasedPresent != Recorder::Presents()) {
+        cache.hostReleasedPresent = Recorder::Presents();
+        RunHostReleasePass(cache);
+    }
     SnapshotBytes recycled;
     if (auto it = findTexture(cache, key); it != cache.entries.end()) {
         if (it->source != nullptr) {
@@ -1142,6 +1188,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
         }
         if (it->bytes.size() == bytes) recycled = std::move(it->bytes);
         else parkSnapshot(cache, it->bytes);
+        if (it->hostReleased) counters.madeAfterRelease.fetch_add(1, std::memory_order_relaxed);
         eraseTexture(cache, it);
         ++cache.counts.stale;
     }

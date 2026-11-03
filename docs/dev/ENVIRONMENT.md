@@ -371,6 +371,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_NO_TEMPLATE_DATA_REFRESH` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/VulkanDevice.cpp` |  | keys the ShaderData and FlattenedSrt words into compute keys instead of refreshing a template's data buffers |
 | `APS5_NO_TEXTURE_CACHE` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/VulkanDevice.cpp` |  | builds every texture and storage-image object fresh instead of caching it |
 | `APS5_NO_TEXTURE_HASH` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` |  | finds texture-cache entries by scanning the list instead of the hash index |
+| `APS5_NO_TEXTURE_HOST_RELEASE` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` |  | evicts whole sampled-texture entries under host pressure instead of releasing their host copies |
 | `APS5_NO_TIMELINE` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/VulkanDevice.cpp` |  | leaves timeline semaphores off, so drains wait under the mutex |
 | `APS5_NO_UNIT_SHADOW` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/UnitShadow.cpp` |  | makes every unit shadow primitive inert |
 | `APS5_NO_UNLOCKED_DEVICE` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Dispatch/Dispatch.cpp` |  | loads the device and runs a dispatch under the GPU mutex instead of using an unlocked device |
@@ -390,6 +391,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_NV_DIAGNOSTICS` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/VulkanDevice.cpp` |  | creates the device with VK_NV_device_diagnostics_config and VK_NV_device_diagnostic_checkpoints where supported, for Nsight Aftermath crash dumps |
 | `APS5_PACKET_EPOCH` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Synchronization/WaitStatistics.cpp` |  | makes queue workers bump the collect epoch before every packet |
 | `APS5_PIPELINED_DRAWS` | integer | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Draw/DrawPipeline.cpp` | 8 | depth of the queue-0 draw pipeline: 0 records draws inline, 1 selects the default depth of 8, and any other value is the depth capped at 256 |
+| `APS5_PIPELINE_CACHE_SAVE_S` | integer | `core/libs/prx/libSceAgcDriver/Graphics/src/PipelineCache.cpp` | 120 | seconds between pipeline-cache saves while running; a save serializes the whole cache twice in memory and writes it out |
 | `APS5_PIPELINE_DISPATCH` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Dispatch/Dispatch.cpp` |  | records an eligible dispatch as an item in the queue-0 pipeline instead of running it inline; an empty value or one starting with `0` leaves it off |
 | `APS5_PIPELINE_DRAIN_FILLS` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Memory/BufferFill.cpp` |  | runs queue-0 buffer fills through the draw pipeline to keep their order; any value stores them in place instead |
 | `APS5_PIPELINE_DRAIN_LABELS` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/Driver/Packets/PacketExecution.cpp` |  | answers a queue-0 wait from the draw pipeline's own pending labels while it is busy; any value drains the pipeline at the wait |
@@ -453,6 +455,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_SYNC_TEXTURE_UPLOAD` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp` |  | restores the waiting batch for every texture upload |
 | `APS5_TEMPLATE_AUDIT_MS` | integer | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` | 1000 | milliseconds after which a cached shader-resource object takes the full walk instead of the fast proof; `0` turns the audit off |
 | `APS5_TEXTURE_CACHE_MIB` | integer | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` | 0 | forced byte budget in MiB for the storage and sampled texture caches; `0` selects the budget automatically |
+| `APS5_TEXTURE_HOST_MIB` | integer | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` | 0 | host-copy soft limit in MiB for the sampled texture cache; `0` uses `min(6 GiB, RAM / 10)` |
 | `APS5_THREAD_NICE` | integer | `core/libs/prx/libSceAgcDriver/Execution/src/ThreadPriority.cpp` | -10 | nice value the raised queue workers and presenter ask rtkit for (clamped to -20..19) |
 | `APS5_THREAD_PRIORITY` | string | `core/libs/prx/libSceAgcDriver/Execution/src/ThreadPriority.cpp` | off | raises the queue workers and presenter above the title's threads: `off`, `high` or `rt`; on macOS `high` is the user-interactive QoS class and `rt` a Mach time-constraint policy (period 1 ms, computation 0.5 ms) |
 | `APS5_THREAD_RT` | integer | `core/libs/prx/libSceAgcDriver/Execution/src/ThreadPriority.cpp` | 10 | realtime priority the raised threads ask rtkit for (clamped to 1..99) |
@@ -490,6 +493,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_TRACE_STAGING` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/GuestBufferMemory.cpp` |  | prints every distinct staged range once, with its size and whether an atomic element lies in it |
 | `APS5_TRACE_SUMMARY_EVERY` | integer | `core/libs/prx/libSceAgcDriver/Execution/include/PerformanceTrace.hpp` |  | seconds between periodic trace summaries, emitted on the next present |
 | `APS5_TRACE_TEXTURES` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` |  | prints a sampled texture's bytes and how many are nonzero |
+| `APS5_TRACE_TEXTURE_CREATION` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp` |  | logs each texture made and each storage-image upload; off by default, it was a flushed write per texture on the queue-0 worker |
 | `APS5_TRACE_UNREADABLE` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/GuestMemory.cpp` |  | names the code that checked an inaccessible range |
 | `APS5_TRACE_UPLOAD` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp` |  | names why a storage image is uploaded again |
 | `APS5_UNIT_SHADOW_MIB` | integer | `core/libs/prx/libSceAgcDriver/Graphics/src/UnitShadow.cpp` | 1024 | budget in MiB of the unit shadow's slabs |
