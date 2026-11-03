@@ -4103,6 +4103,8 @@ void StorageTexture::noteLayersBehind(std::uint32_t firstLayer, std::uint32_t la
 namespace {
 std::atomic<std::uint64_t> flipSerial{0};
 std::atomic<std::uint64_t> occasionalLabelStores{0};
+std::atomic<std::uint64_t> deferredLabelReadbacks{0};
+std::atomic<std::uint64_t> deferredLabelReadbacksTotal{0};
 }
 
 void StorageTexture::NoteFlip() {
@@ -4684,17 +4686,26 @@ bool StorageTexture::FlushPending(std::uint64_t address, std::size_t bytes, cons
             const auto openWrites = [&stored](const Recorder& active) {
                 return std::any_of(stored.begin(), stored.end(), [&active](const auto& range) { return active.OpenWriteOverlaps(range.first, static_cast<std::size_t>(range.second - range.first)); });
             };
-            for (waitRanges(); pendingWriter(*recorder) != 0; waitRanges()) {
-                recorder->Reap();
-                waitRanges();
-                const auto writer = pendingWriter(*recorder);
-                if (writer == recorder->OpenSerial()) {
-                    Recorder::CountSync(openWrites(*recorder) ? 1 : 3);
-                    recorder->Sync();
-                    break;
+            const bool deferLabel = reason != nullptr && std::strcmp(reason, DeferredLabelReadbackReason) == 0;
+            const bool deferWriter = deferLabel && std::all_of(flush.begin(), flush.end(), [](const std::shared_ptr<StorageTexture>& texture) {
+                return HostImportFor(texture->context, texture->descriptor.baseAddress, static_cast<std::size_t>(texture->guestBytes)) != nullptr;
+            });
+            if (deferWriter) {
+                deferredLabelReadbacks.fetch_add(1, std::memory_order_relaxed);
+                deferredLabelReadbacksTotal.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                for (waitRanges(); pendingWriter(*recorder) != 0; waitRanges()) {
+                    recorder->Reap();
+                    waitRanges();
+                    const auto writer = pendingWriter(*recorder);
+                    if (writer == recorder->OpenSerial()) {
+                        Recorder::CountSync(openWrites(*recorder) ? 1 : 3);
+                        recorder->Sync();
+                        break;
+                    }
+                    if (writer == 0) break;
+                    recorder->FinishUpTo(writer);
                 }
-                if (writer == 0) break;
-                recorder->FinishUpTo(writer);
             }
         } catch (...) {
             for (const auto& texture : flush) texture->reconcilePending();
@@ -5118,6 +5129,10 @@ void StorageTexture::StoreReadbackBeforeLabel(const char* reason, VkDevice devic
     }
     for (const auto& [address, bytes] : ranges) static_cast<void>(FlushPending(address, bytes, nullptr, reason));
     for (const auto& [address, bytes] : occasional) static_cast<void>(FlushPending(address, bytes, nullptr, reason, PublishScope::Whole, nullptr, false, device));
+}
+
+std::uint64_t StorageTexture::DeferredLabelReadbacks() {
+    return deferredLabelReadbacksTotal.load(std::memory_order_relaxed);
 }
 
 std::size_t StorageTexture::StoreDrawnLinear(const char* reason) {
