@@ -41,6 +41,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_GATHER_CONST` | integer | `core/shader/recompiler/SpirvBackend/src/SpirvImageEmitter.cpp` |  | integer every non-depth gather returns in all four texels instead of the sampled value |
 | `APS5_IMAGE_TABLE_KEY_SCAN` | integer | `core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp` | 256 | number of image-table entries the key scan examines |
 | `APS5_IMAGE_TABLE_STRICT` | string | `core/shader/recompiler/Optimization/src/ResourceMaterializer.cpp` |  | sets image-table materialization to its strict form; 0 leaves it off |
+| `APS5_NGS2_TRACE_PARAMS` | presence | `core/libs/prx/libSceNgs2.native/src/Custom.cpp` |  | prints every custom voice parameter's id, size and first 264 bytes on stderr before it is applied |
 | `APS5_NO_ATOMIC_BARRIER` | presence | `core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvFormatConvert.cpp` |  | drops the device-scope acquire/release memory barrier emitted after atomics |
 | `APS5_NO_ATOMIC_ZERO_SKIP` | presence | `core/shader/recompiler/SpirvBackend/src/SpirvMemory/SpirvMemoryInstructions.cpp` |  | restores plain buffer atomics instead of skipping identity-operand atomics |
 | `APS5_NO_BUFFER_SUBSTITUTES` | presence | `core/shader/recompiler/Recompiler.cpp` |  | specializes a null buffer V# with its own words instead of the fields its slot had the first time a dispatch of the same program bound it |
