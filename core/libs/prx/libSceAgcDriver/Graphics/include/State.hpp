@@ -250,6 +250,7 @@ struct ColorMetadataPass {
     std::optional<ColorTarget> source;
 };
 std::optional<ColorMetadataPass> DecodeColorMetadataPass(const QueueState& queue);
+bool DepthMetadataBlit(const QueueState& queue);
 struct DepthCopyPass {
     DepthTarget source;
     std::uint32_t sample;
