@@ -2627,19 +2627,58 @@ bool StorageTexture::refreshProved() {
     if (!GuestMemory::UnchangedSinceAll(std::span(queries.data(), used))) return false;
     const auto serial = PendingSerial();
     if (serial != refreshProof.pendingSerial) {
-        if (otherPendingOverlaps()) return false;
+        std::array<RefreshProof::Other, 4> others{};
+        std::uint8_t count = 0;
+        bool tooMany = false;
+        {
+            auto& pending = Pending();
+            std::lock_guard lock(pending.mutex);
+            const auto add = [&](StorageTexture* texture) {
+                if (texture == this || !texture->overlaps(descriptor.baseAddress, bytes)) return true;
+                if (count == others.size()) {
+                    tooMany = true;
+                    return false;
+                }
+                others[count++] = {texture->weak_from_this(), texture->Version(), texture->uploadedKeys, texture->Cached()};
+                return true;
+            };
+            for (auto* texture : pending.textures) if (!add(texture)) break;
+            if (!tooMany) for (auto* texture : pending.flushing) if (!add(texture)) break;
+        }
+        if (tooMany || count != refreshProof.otherCount) return false;
+        for (std::uint8_t i = 0; i < count; ++i) {
+            const auto live = refreshProof.others[i].texture.lock();
+            if (live == nullptr) return false;
+            const auto found = std::find_if(others.begin(), others.begin() + count, [&](const RefreshProof::Other& other) { return other.texture.lock().get() == live.get(); });
+            if (found == others.begin() + count) return false;
+            if (found->version != refreshProof.others[i].version || found->keys != refreshProof.others[i].keys || found->cached != refreshProof.others[i].cached) return false;
+        }
         refreshProof.pendingSerial = serial;
     }
     return true;
 }
 
 void StorageTexture::takeRefreshProof(bool aliased) {
+    (void)aliased;
     refreshProof = {};
-    if (aliased || generation == 0 || !GuestMemory::GpuMutex().HeldByThisThread()) return;
+    if (generation == 0 || !GuestMemory::GpuMutex().HeldByThisThread()) return;
     if (descriptor.dccAddress != 0 && (keyProof.generation == 0 || keyProof.keys != uploadedKeys)) return;
     const auto serial = PendingSerial();
-    if (otherPendingOverlaps()) return;
-    refreshProof = {generation, serial, keyProof.generation, uploadedKeys};
+    const auto bytes = static_cast<std::size_t>(guestBytes);
+    auto& pending = Pending();
+    std::lock_guard lock(pending.mutex);
+    const auto add = [&](StorageTexture* texture) {
+        if (texture == this || !texture->overlaps(descriptor.baseAddress, bytes)) return true;
+        if (refreshProof.otherCount == refreshProof.others.size()) return false;
+        refreshProof.others[refreshProof.otherCount++] = {texture->weak_from_this(), texture->Version(), texture->uploadedKeys, texture->Cached()};
+        return true;
+    };
+    for (auto* texture : pending.textures) if (!add(texture)) return;
+    for (auto* texture : pending.flushing) if (!add(texture)) return;
+    refreshProof.generation = generation;
+    refreshProof.pendingSerial = serial;
+    refreshProof.keyGeneration = keyProof.generation;
+    refreshProof.keys = uploadedKeys;
 }
 
 std::uint64_t StorageTexture::RefreshesProved() {
