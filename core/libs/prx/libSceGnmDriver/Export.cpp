@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <iterator>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VideoOutput.hpp"
 #include "prx/libSceAgcDriver/Eq/include/Event.hpp"
+#include "prx/libSceGnmDriverForNeoMode/include/EmbeddedShaders.hpp"
 #include "prx/libSceVideoOut/include/Buffer.hpp"
 
 namespace {
@@ -68,10 +70,18 @@ constexpr int GNM_ERROR_VALIDATION_NOT_ENABLED = static_cast<int>(0x80d13fffu);
 constexpr int GNM_ERROR_CAPTURE_RAZOR_NOT_LOADED = static_cast<int>(0x80d15001u);
 constexpr int GNM_ERROR_CAPTURE_FAILED_INTERNAL = static_cast<int>(0x80d1500fu);
 
+std::uint32_t AddressLo(const void* code) {
+    return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(code) >> 8);
+}
+
+std::uint32_t AddressHi(const void* code) {
+    return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(code) >> 40);
+}
+
 using RegisterValue = std::pair<std::uint32_t, std::uint32_t>;
 
-constexpr std::uint32_t Header(std::uint32_t opcode, std::uint32_t bodyWords, bool compute = false) {
-    return 0xc0000000u | ((bodyWords - 1) << 16) | (opcode << 8) | (compute ? 2u : 0u);
+constexpr std::uint32_t Header(std::uint32_t opcode, std::uint32_t bodyWords, bool compute = false, bool predicated = false) {
+    return 0xc0000000u | ((bodyWords - 1) << 16) | (opcode << 8) | (compute ? 2u : 0u) | (predicated ? 1u : 0u);
 }
 
 std::uint32_t* Emit(std::uint32_t* at, std::uint32_t opcode, std::initializer_list<std::uint32_t> body, bool compute = false) {
@@ -103,6 +113,54 @@ std::uint32_t* DefaultState(std::uint32_t* at, std::uint32_t scModeCntl1) {
     at = Emit(at, OpSetContextReg, {0x295, 0x100, 0x100, 4});
     return Emit(at, OpSetUconfigReg, {0x200, 0xe0000000u});
 }
+
+std::uint32_t* DefaultState350(std::uint32_t* at) {
+    at = SetRegisters(at, OpSetShReg, {{0x216, 0xffffffffu}, {0x217, 0xffffffffu}, {0x219, 0xffffffffu}, {0x21a, 0xffffffffu}, {0x215, 0}});
+    at = SetRegisters(at, OpSetContextReg, {{0x2f9, 0x2d}, {0x282, 8}, {0x280, 0x80008}, {0x281, 0xffff0000u}, {0x204, 0}, {0x206, 0x43f}, {0x83, 0xffff}, {0x317, 0x10},
+        {0x2fa, 0x3f800000u}, {0x2fc, 0x3f800000u}, {0x2fb, 0x3f800000u}, {0x2fd, 0x3f800000u}, {0x202, 0xcc0010}, {0x30e, 0xffffffffu}, {0x30f, 0xffffffffu}});
+    at = Emit(at, OpNumInstances, {1});
+    at = SetRegisters(at, OpSetShReg, {{7, 0x1701ff}, {0x46, 0x1701fd}, {0x87, 0x1701ff}, {0xc7, 0x1701fd}, {0x107, 0x17}, {0x147, 0x1701fd}, {0x47, 0x1c}});
+    at = SetRegisters(at, OpSetContextReg, {{0x1b1, 2}, {0x101, 0}, {0x100, 0xffffffffu}, {0x103, 0}, {0x284, 0}, {0x290, 0}, {0x2ae, 0}, {0x102, 0}, {0x292, 0},
+        {0x293, 0x6020000}, {0x2f8, 0}, {0x2de, 0x1e9}});
+    at = Emit(at, OpSetContextReg, {0xeb, 0xff00ff00u, 0xff00u});
+    at = Emit(at, OpSetContextReg, {0x295, 0x100, 0x100, 4});
+    at = Emit(at, OpSetUconfigReg, {0x200, 0xe0000000u});
+    return Emit(at, OpSetUconfigReg, {0x40000258u, 0x6d007fu});
+}
+
+constexpr std::uint32_t DrawFlags = 0xe0000000u;
+constexpr std::uint32_t AutoIndex = 2;
+constexpr std::uint32_t IaMultiVgtParam = 0x40000258u;
+constexpr std::uint32_t DrawIndirectArgsBytes = 0x10;
+constexpr std::uint32_t DrawIndexedIndirectArgsBytes = 0x14;
+constexpr std::uint32_t ShaderStageCount = 7;
+constexpr std::uint32_t IndirectSgprBase[ShaderStageCount] = {0, 0, 0x4c, 0, 0xcc, 0, 0x14c};
+
+std::uint32_t IndirectSgpr(std::uint32_t stage, std::uint32_t offset) {
+    return offset == 0 ? 0 : (offset & 0xffffu) + IndirectSgprBase[stage];
+}
+
+bool ValidIndirect(std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr) {
+    return stage < ShaderStageCount && vertexSgpr < 0x10 && instanceSgpr < 0x10;
+}
+
+bool IndexedIndirectStage(std::uint32_t stage) {
+    return stage == 2 || stage == 4 || stage == 6;
+}
+
+std::uint32_t* UpdatePsRegisters(std::uint32_t* at, const std::uint32_t* regs) {
+    at = Emit(at, OpSetShReg, {8, regs[0], 0});
+    at = Emit(at, OpSetShReg, {10, regs[2], regs[3]});
+    at = Emit(at, OpNop, {0xc01e01c4u, regs[4], regs[5]});
+    at = Emit(at, OpNop, {0xc01e01b3u, regs[6], regs[7]});
+    at = Emit(at, OpNop, {0xc01e01b6u, regs[8]});
+    at = Emit(at, OpNop, {0xc01e01b8u, regs[9]});
+    at = Emit(at, OpNop, {0xc01e0203u, regs[10]});
+    return Emit(at, OpNop, {0xc01e008fu, regs[11]});
+}
+
+constexpr std::uint32_t ContextState[] = {0xc0012800u, 0x80000000u, 0x80000000u, 0xc0001200u, 0x0u, 0xc0002f00u, 0x1u, 0xc0016900u, 0x102u, 0x0u,
+    0xc0016900u, 0x202u, 0xcc0010u, 0xc0026900u, 0xebu, 0xff00ff00u, 0xff00u, 0xc00d1000u, 0x0u};
 
 struct FrameStart {
     std::uint32_t words[HwInitPacketWords]{};
@@ -585,13 +643,35 @@ int APS5_VABI sceGnmCreateWorkloadStream() {
     return 0;
 }
 
-int APS5_VABI sceGnmSetPsShader350() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmSetPsShader350(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs) {
+    if (!cmd || size <= 0x27) return -1;
+    if (!regs) {
+        cmd = Emit(cmd, OpSetShReg, {8, 0, 0});
+        cmd = Emit(cmd, OpSetContextReg, {0x203, 0});
+        cmd = Emit(cmd, OpSetContextReg, {0x8f, 0xf});
+        Nop(cmd, 0x1d);
+        return 0;
+    }
+    if (regs[1] != 0) return -1;
+    cmd = Emit(cmd, OpSetShReg, {8, regs[0], 0});
+    cmd = Emit(cmd, OpSetShReg, {10, regs[2], regs[3]});
+    cmd = Emit(cmd, OpSetContextReg, {0x1c4, regs[4], regs[5]});
+    cmd = Emit(cmd, OpSetContextReg, {0x1b3, regs[6], regs[7]});
+    cmd = SetRegisters(cmd, OpSetContextReg, {{0x1b6, regs[8]}, {0x1b8, regs[9]}, {0x203, regs[10]}, {0x8f, regs[11]}});
+    Nop(cmd, 11);
     return 0;
 }
 
-int APS5_VABI sceGnmSetVgtControl() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmSetVgtControl(std::uint32_t* cmd, std::uint32_t size, std::uint32_t primGroupSizeMinusOne, std::uint32_t partialVsWaveMode, std::uint32_t switchOnlyOnEop) {
+    if (!cmd || size != 3 || primGroupSizeMinusOne >= 0x100 || (switchOnlyOnEop | partialVsWaveMode) >= 2) return -1;
+    const std::uint32_t switchOnEop = static_cast<std::uint32_t>(switchOnlyOnEop != 0) << 20;
+    const std::uint32_t switchOnEoi = static_cast<std::uint32_t>(switchOnlyOnEop == 0) << 19;
+    const std::uint32_t value = switchOnlyOnEop != 0
+        ? ((partialVsWaveMode & 1) << 16) | primGroupSizeMinusOne | switchOnEop | switchOnEoi | 0x40000u
+        : (primGroupSizeMinusOne & 0x1cffffu) | switchOnEop | switchOnEoi | 0x50000u;
+    cmd[0] = Header(OpSetUconfigReg, 2);
+    cmd[1] = IaMultiVgtParam;
+    cmd[2] = value | 0x600000u;
     return 0;
 }
 
@@ -620,38 +700,79 @@ int APS5_VABI sceGnmDingDongForWorkload() {
     return 0;
 }
 
-int APS5_VABI sceGnmDispatchDirect() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDispatchDirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t threadsX, std::uint32_t threadsY, std::uint32_t threadsZ, std::uint32_t flags) {
+    if (!cmd || size != 9 || static_cast<std::int32_t>(threadsX | threadsY | threadsZ) < 0) return -1;
+    cmd[0] = Header(0x15, 4, true, (flags & 1) != 0);
+    cmd[1] = threadsX;
+    cmd[2] = threadsY;
+    cmd[3] = threadsZ;
+    cmd[4] = (flags & 0x18) + 1;
+    Nop(cmd + 5, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDispatchIndirect() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDispatchIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t flags) {
+    if (!cmd || size != 7) return -1;
+    cmd[0] = Header(0x16, 2, true, (flags & 1) != 0);
+    cmd[1] = dataOffset;
+    cmd[2] = (flags & 0x18) + 1;
+    Nop(cmd + 3, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDispatchIndirectOnMec() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDispatchIndirectOnMec(std::uint32_t* cmd, std::uint32_t size, std::uint64_t args, std::uint32_t modifier) {
+    if (!cmd || size != 8 || args == 0 || (args & 3) != 0) return -1;
+    cmd[0] = Header(0x16, 3, true, (modifier & 1) != 0);
+    cmd[1] = static_cast<std::uint32_t>(args);
+    cmd[2] = static_cast<std::uint32_t>(args >> 32);
+    cmd[3] = (modifier & 0x18) | 1;
+    Nop(cmd + 4, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndex() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndex(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint64_t indexAddress, std::uint32_t flags, std::uint32_t) {
+    if (!cmd || size != 10 || indexAddress == 0 || (indexAddress & 1) != 0 || (flags & 0x1ffffffeu) != 0) return -1;
+    cmd[0] = Header(0x27, 5);
+    cmd[1] = indexCount;
+    cmd[2] = static_cast<std::uint32_t>(indexAddress);
+    cmd[3] = static_cast<std::uint32_t>(indexAddress >> 32);
+    cmd[4] = indexCount;
+    cmd[5] = flags & DrawFlags;
+    Nop(cmd + 6, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndexAuto() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndexAuto(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint32_t flags) {
+    if (!cmd || size != 7 || (flags & 0x1ffffffeu) != 0) return -1;
+    cmd[0] = Header(0x2d, 2);
+    cmd[1] = indexCount;
+    cmd[2] = (flags & DrawFlags) | AutoIndex;
+    Nop(cmd + 3, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndexIndirect() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndexIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags) {
+    if (!cmd || size != 9 || !ValidIndirect(stage, vertexSgpr, instanceSgpr)) return -1;
+    cmd[0] = Header(0x25, 4, false, (flags & 1) != 0);
+    cmd[1] = dataOffset;
+    cmd[2] = IndirectSgpr(stage, vertexSgpr);
+    cmd[3] = IndirectSgpr(stage, instanceSgpr);
+    cmd[4] = flags & DrawFlags;
+    Nop(cmd + 5, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndexIndirectMulti() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndexIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr,
+    std::uint32_t flags) {
+    if (!cmd || size != 11 || vertexSgpr >= 0x10 || instanceSgpr >= 0x10 || !IndexedIndirectStage(stage)) return -1;
+    cmd[0] = Header(0x38, 6, false, (flags & 1) != 0);
+    cmd[1] = dataOffset;
+    cmd[2] = IndirectSgpr(stage, vertexSgpr);
+    cmd[3] = IndirectSgpr(stage, instanceSgpr);
+    cmd[4] = maxCount;
+    cmd[5] = DrawIndexedIndirectArgsBytes;
+    cmd[6] = flags & DrawFlags;
+    Nop(cmd + 7, 3);
     return 0;
 }
 
@@ -660,29 +781,56 @@ int APS5_VABI sceGnmDrawIndexMultiInstanced() {
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndexOffset() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndexOffset(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexOffset, std::uint32_t indexCount, std::uint32_t flags) {
+    if (!cmd || size != 9) return -1;
+    cmd[0] = Header(0x35, 4, false, (flags & 1) != 0);
+    cmd[1] = indexCount;
+    cmd[2] = indexOffset;
+    cmd[3] = indexCount;
+    cmd[4] = flags & DrawFlags;
+    Nop(cmd + 5, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndirect() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags) {
+    if (!cmd || size != 9 || !ValidIndirect(stage, vertexSgpr, instanceSgpr)) return -1;
+    cmd[0] = Header(0x24, 4, false, (flags & 1) != 0);
+    cmd[1] = dataOffset;
+    cmd[2] = IndirectSgpr(stage, vertexSgpr);
+    cmd[3] = IndirectSgpr(stage, instanceSgpr);
+    cmd[4] = (flags & DrawFlags) | AutoIndex;
+    Nop(cmd + 5, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawIndirectMulti() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmDrawIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr,
+    std::uint32_t flags) {
+    if (!cmd || size != 11 || !ValidIndirect(stage, vertexSgpr, instanceSgpr)) return -1;
+    cmd[0] = Header(0x2c, 6, false, (flags & 1) != 0);
+    cmd[1] = dataOffset;
+    cmd[2] = IndirectSgpr(stage, vertexSgpr);
+    cmd[3] = IndirectSgpr(stage, instanceSgpr);
+    cmd[4] = maxCount;
+    cmd[5] = DrawIndirectArgsBytes;
+    cmd[6] = (flags & DrawFlags) | AutoIndex;
+    Nop(cmd + 7, 3);
     return 0;
 }
 
-int APS5_VABI sceGnmDrawInitDefaultHardwareState350() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+std::uint32_t APS5_VABI sceGnmDrawInitDefaultHardwareState350(std::uint32_t* cmd, std::uint32_t size) {
+    if (size < HwInitPacketWords) return 0;
+    auto* at = Emit(cmd, OpContextControl, {0x80000000u, 0x80000000u});
+    at = Emit(at, OpClearState, {0});
+    at = Emit(at, OpAcquireMem, {0x2ec47fc0u, 0xffffffffu, 0, 0, 0, 10});
+    at = DefaultState350(at);
+    Nop(at, static_cast<std::uint32_t>(cmd + HwInitPacketWords - at) - 1);
+    return HwInitPacketWords;
 }
 
-int APS5_VABI sceGnmDrawInitToDefaultContextState() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI sceGnmDrawInitToDefaultContextState(std::uint32_t* cmd, std::uint32_t size) {
+    if (!cmd || size != 0x20) return 0;
+    std::copy(std::begin(ContextState), std::end(ContextState), cmd);
+    return 0x20;
 }
 
 int APS5_VABI sceGnmDrawOpaqueAuto() {
@@ -690,13 +838,25 @@ int APS5_VABI sceGnmDrawOpaqueAuto() {
     return 0;
 }
 
-int APS5_VABI sceGnmUpdateGsShader() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmUpdateGsShader(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs) {
+    if (!cmd || size < 0x1d || !regs || regs[1] != 0) return -1;
+    auto* at = Emit(cmd, OpSetShReg, {0x88, regs[0], 0});
+    at = Emit(at, OpSetShReg, {0x8a, regs[2], regs[3]});
+    at = Emit(at, OpNop, {0xc01e02e5u, regs[4]});
+    at = Emit(at, OpNop, {0xc01e029bu, regs[5]});
+    at = Emit(at, OpNop, {0xc01e02e4u, regs[6]});
+    Nop(at, 11);
     return 0;
 }
 
-int APS5_VABI sceGnmUpdateHsShader() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmUpdateHsShader(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs, std::uint32_t lsHsConfig) {
+    if (!cmd || size <= 0x1c || !regs || regs[1] != 0) return -1;
+    auto* at = Emit(cmd, OpSetShReg, {0x108, regs[0], 0});
+    at = Emit(at, OpSetShReg, {0x10a, regs[2], regs[3]});
+    at = Emit(at, OpNop, {0xc01e0286u, regs[5], regs[6]});
+    at = Emit(at, OpNop, {0xc01e02dbu, regs[4]});
+    at = Emit(at, OpNop, {0xc01e02d6u, lsHsConfig});
+    Nop(at, 11);
     return 0;
 }
 
@@ -710,13 +870,29 @@ int APS5_VABI sceGnmEndWorkload() {
     return 0;
 }
 
-int APS5_VABI sceGnmUpdatePsShader350() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmUpdatePsShader350(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs) {
+    if (!cmd || size <= 0x27) return -1;
+    if (!regs) {
+        auto* at = Emit(cmd, OpSetShReg, {8, 0, 0});
+        at = Emit(at, OpNop, {0xc01e0203u, 0});
+        at = Emit(at, OpSetContextReg, {0x8f, 0xf});
+        Nop(at, 0x1d);
+        return 0;
+    }
+    if (regs[1] != 0) return -1;
+    Nop(UpdatePsRegisters(cmd, regs), 11);
     return 0;
 }
 
-int APS5_VABI sceGnmUpdateVsShader() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmUpdateVsShader(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs, std::uint32_t modifier) {
+    if (!cmd || size <= 0x1c || !regs || (modifier & 0xfcfffc3fu) != 0 || regs[1] != 0) return -1;
+    const std::uint32_t rsrc1 = modifier == 0 ? regs[2] : (regs[2] & 0xfcfffc3fu) | modifier;
+    auto* at = Emit(cmd, OpSetShReg, {0x48, regs[0], 0});
+    at = Emit(at, OpSetShReg, {0x4a, rsrc1, regs[3]});
+    at = Emit(at, OpNop, {0xc01e0207u, regs[6]});
+    at = Emit(at, OpNop, {0xc01e01b1u, regs[4]});
+    at = Emit(at, OpNop, {0xc01e01c3u, regs[5]});
+    Nop(at, 11);
     return 0;
 }
 
@@ -815,18 +991,41 @@ int APS5_VABI sceGnmRequestFlipAndSubmitDoneForWorkload() {
     return 0;
 }
 
-int APS5_VABI sceGnmSetCsShaderWithModifier() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmSetCsShaderWithModifier(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs, std::uint32_t modifier) {
+    if (!cmd || size <= 0x18 || !regs || (modifier & 0xfffffc3fu) != 0 || regs[1] != 0) return -1;
+    const std::uint32_t rsrc1 = modifier == 0 ? regs[2] : (regs[2] & 0xfffffc3fu) | modifier;
+    cmd = Emit(cmd, OpSetShReg, {0x20c, regs[0], 0});
+    cmd = Emit(cmd, OpSetShReg, {0x212, rsrc1, regs[3]});
+    cmd = Emit(cmd, OpSetShReg, {0x207, regs[4], regs[5], regs[6]});
+    Nop(cmd, 11);
     return 0;
 }
 
-int APS5_VABI sceGnmSetEmbeddedPsShader() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmSetEmbeddedPsShader(std::uint32_t* cmd, std::uint32_t size, std::uint32_t shaderId, std::uint32_t cachePolicy) {
+    if (!cmd || size < 0x28 || shaderId > 1 || cachePolicy != 0) return -1;
+    const bool black = shaderId == 0;
+    const auto* code = black ? GnmNeo::BlackPs.data() : GnmNeo::DepthOnlyPs.data();
+    cmd = Emit(cmd, OpSetShReg, {8, AddressLo(code), AddressHi(code)});
+    cmd = Emit(cmd, OpSetShReg, {10, black ? 0xc0000u : 0x2000u, black ? 4u : 0u});
+    cmd = Emit(cmd, OpSetContextReg, {0x1c4, 0, black ? 4u : 2u});
+    cmd = Emit(cmd, OpSetContextReg, {0x1b3, 2, 2});
+    cmd = Emit(cmd, OpSetContextReg, {0x1b6, 0});
+    cmd = Emit(cmd, OpSetContextReg, {0x1b8, 0});
+    cmd = Emit(cmd, OpSetContextReg, {0x203, 0x10});
+    cmd = Emit(cmd, OpSetContextReg, {0x8f, black ? 0xfu : 3u});
+    Nop(cmd, 11);
     return 0;
 }
 
-int APS5_VABI sceGnmSetEmbeddedVsShader() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmSetEmbeddedVsShader(std::uint32_t* cmd, std::uint32_t size, std::uint32_t shaderId, std::uint32_t cachePolicy) {
+    if (!cmd || size < 0x1d || shaderId != 0 || cachePolicy != 0) return -1;
+    const auto* code = GnmNeo::FullscreenVs.data();
+    cmd = Emit(cmd, OpSetShReg, {0x48, AddressLo(code), AddressHi(code)});
+    cmd = Emit(cmd, OpSetShReg, {0x4a, 0xc0000, 4});
+    cmd = Emit(cmd, OpSetContextReg, {0x207, 0});
+    cmd = Emit(cmd, OpSetContextReg, {0x1b1, 0});
+    cmd = Emit(cmd, OpSetContextReg, {0x1c3, 4});
+    Nop(cmd, 11);
     return 0;
 }
 
@@ -911,8 +1110,11 @@ int APS5_VABI sceGnmRegisterResource() {
     return 0;
 }
 
-int APS5_VABI sceGnmResetVgtControl() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceGnmResetVgtControl(std::uint32_t* cmd, std::uint32_t size) {
+    if (!cmd || size != 3) return -1;
+    cmd[0] = Header(OpSetUconfigReg, 2);
+    cmd[1] = IaMultiVgtParam;
+    cmd[2] = 0x6d007fu;
     return 0;
 }
 
