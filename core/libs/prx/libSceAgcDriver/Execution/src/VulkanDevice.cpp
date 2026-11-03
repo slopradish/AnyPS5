@@ -1614,7 +1614,7 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window, bool compileOnly) :
     if (state->nativeFma32) {
         deviceExtensions.push_back(VK_KHR_SHADER_FMA_EXTENSION_NAME);
         state->capabilities.push_back(spv::CapabilityFMAKHR);
-        state->spirvExtensions.push_back("SPV_KHR_shader_fma");
+        state->spirvExtensions.push_back("SPV_KHR_fma");
     }
     VkPhysicalDeviceShaderAtomicInt64FeaturesKHR atomicInt64Features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR};
     if (hasExtension(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) {
@@ -4489,6 +4489,7 @@ Graphics::Context VulkanDevice::buildContext() const {
     context.imageViewMinLod = state->imageViewMinLod;
     context.shaderResourceMinLod = state->shaderResourceMinLod;
     context.shaderImageMinLod = state->shaderImageMinLod;
+    context.nativeFma32 = state->nativeFma32;
     context.pipelineExecutableInfo = state->pipelineExecutableInfo;
     context.maintenance8 = state->maintenance8;
     context.srgbDecodeFormats = state->srgbDecodeFormats;
