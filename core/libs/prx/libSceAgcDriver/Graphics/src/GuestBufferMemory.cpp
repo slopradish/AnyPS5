@@ -5335,6 +5335,11 @@ bool gpuCopiesEnabled() {
     return !disabled;
 }
 
+bool adjustedRegionsEnabled() {
+    static const bool disabled = std::getenv("APS5_NO_ADJUSTED_REGIONS") != nullptr;
+    return !disabled;
+}
+
 std::uint64_t gpuCopyLimit() {
     static const std::uint64_t limit = [] {
         const char* value = std::getenv("APS5_GPU_COPY_MAX_KIB");
@@ -5427,6 +5432,7 @@ struct CopyStats {
     // Written gpuCopy regions of a use that recorded no copy-back (a synchronous draw): stored
     // from the staging buffer by the CPU in WriteBack.
     std::atomic<std::uint64_t> stagingStores{0};
+    std::atomic<std::uint64_t> adjustedInPlace{0};
     // Staged regions copied in (every use), those with an atomic element, those of a reused build,
     // the bytes copied in and back, staged regions whose use recorded a copy-in but no copy-back
     // (counted when the build is reused or destroyed), and shadows the device refused.
@@ -5541,7 +5547,7 @@ bool GuestBufferMemory::gpuCopyEligible(const Region& region) const {
 }
 
 bool GuestBufferMemory::bindableInPlace(std::uint64_t offset, bool addressable) const {
-    if (adjustedRegions && !addressable) return offset % 4 == 0;
+    if (adjustedRegions && !addressable && adjustedRegionsEnabled()) return offset % 4 == 0;
     return offset % context.limits.minStorageBufferOffsetAlignment == 0;
 }
 
@@ -5741,6 +5747,7 @@ void GuestBufferMemory::UploadPrepare(bool addressable) {
             region.adaptiveInPlace = Recorder::Active() != nullptr && stagingWanted(region, addressable) && adaptiveInPlace(region, true);
             bool staged = Recorder::Active() != nullptr && stagingEligible(region, addressable);
             const bool misaligned = !bindableInPlace(HostImportOffset(*entry, region.begin), addressable);
+            if (profile && misaligned && adjustedRegionsEnabled()) Copies().adjustedInPlace.fetch_add(1, std::memory_order_relaxed);
             if (staged) {
                 const auto allocateStart = std::chrono::steady_clock::now();
                 region.buffer = stagingBuffer(context, static_cast<std::size_t>(region.end - region.begin), gpuCopyUsage(addressable));
