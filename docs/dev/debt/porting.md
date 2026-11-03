@@ -47,7 +47,7 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | 16 | PS4 GNM writers | local `4eda89a099` | done |
 | 17 | INDEX_TYPE decode | local `77fbd10ac7` | done |
 | 18 | NGS2 PS4 rack layout | local (refactored) | done |
-| 19 | PS4 audio buzz | none yet | open: trace NGS2 output format/rate and AudioOut port handle |
+| 19 | PS4 audio buzz | none yet | host device spec matches the guest exactly (48 kHz, 8ch S16, `ab698b02e8`); the PS4 launcher does not use the NGS2 native render, so the remaining suspect is the guest 8-channel interleave/mix, not a host resample |
 
 ## Recovered modules and cross-fork improvements
 
