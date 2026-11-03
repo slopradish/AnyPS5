@@ -1246,4 +1246,33 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
     }
 }
 
+std::vector<std::uint32_t> ReadRegisterPairs(std::span<const std::uint32_t> packet) {
+    return ReadIndirectRegisters(packet);
+}
+
+void ApplyRegisterPairs(std::span<const std::uint32_t> packet, QueueState& queue, std::span<const std::uint32_t> pairs) {
+    ExecuteIndirectRegisters(packet, pairs, queue, false);
+}
+
+StateEffect PacketStateEffect(std::uint32_t header) {
+    if (FillerPacket(header)) return StateEffect::None;
+    const auto opcode = (header >> 8u) & 0xffu;
+    if (opcode == 0x10) {
+        switch ((header >> 2u) & 0x3fu) {
+            case 0: case 0x06: case 0x17: return StateEffect::None;
+            case 0x09: case 0x0b: case 0x0c: case 0x1a: return StateEffect::Registers;
+            default: return StateEffect::Unknown;
+        }
+    }
+    if (DrawOpcode(opcode)) return StateEffect::None;
+    if (RegisterLoadOpcode(opcode)) return StateEffect::Loads;
+    switch (opcode) {
+        case 0x11: case 0x12: case 0x13: case 0x26: case 0x2a: case 0x2f: case 0x69: case 0x76: case 0x79: case 0x7a: case 0x81:
+            return StateEffect::Registers;
+        case 0x15: case 0x16: case 0x37: case 0x3c: case 0x40: case 0x42: case 0x46: case 0x49: case 0x50: case 0x58: case 0x59: case 0x83: case 0x93:
+            return StateEffect::None;
+        default: return StateEffect::Unknown;
+    }
+}
+
 }
