@@ -49,6 +49,35 @@ PR. A fix that flips from present to missing in that report is a fix the merge d
 | 18 | NGS2 PS4 rack layout | local (refactored) | done |
 | 19 | PS4 audio buzz | none yet | open: trace NGS2 output format/rate and AudioOut port handle |
 
+## Recovered modules and cross-fork improvements
+
+| Module | Source | Status |
+|--------|--------|--------|
+| Runtime-switch table + A/B key salt | Yotei `798c4e6ff9` substrate | ported (`4a0283fc60`), 84 switches |
+| StorageAlias block mapping | legacy `4d29e7e9fb`/`StorageAlias.*` | ported (`541b24e5a5`), test `057d0687df` |
+| TextureResidency budget/limits/clock | legacy `f5f2b3d0d1` | ported (`55980b155e`), test `553f7a60d7` |
+| GpuClock conversion | legacy `97e9a3e65d` | ported (`55980b155e`), test `55...` |
+| `APS5_DEFER_LABEL_READBACK` | Yotei `798c4e6ff9` | ported on the current flush path (`3e2eb725dd`), switch off by default |
+| `APS5_RESOURCE_CACHE_LARGE` | Yotei `ba62bda306` | ported (`1639b6c433`): base 4096, `APS5_RESOURCE_CACHE_LARGE_ENTRIES` |
+| `APS5_DISPATCH_CACHE_LARGE` | Yotei `68940f85b2` | not needed: this tree's dispatch cache is already 4096/8192/16384 entries |
+| Texture budget follows the live budget | Kyty `0e99357e4d` | already: `SampledTextureBudget` recomputes from `reported` on every call |
+| SrtWalker control-flow read-ahead rule | TheCruZ `440adec5eb` | already partially: `SrtFlatSlotClasses` excludes control-flow-only slots from the pure set; verify against Astro Bot |
+| PassHazards draw grouping | TheCruZ `629f98d04e` | already: upstream's `PassHazards` tracks writes and keeps draws in the pass |
+| Empty fragment shader for pixel-less pipelines | Kyty `5a7fa9a1b3` | pending: check the null-pixel-program path |
+| GPU-interrupt coalescing | TheCruZ `7e70f8af8e` | pending: audit the label/event queue for per-event growth |
+| Bindless-table element checks by version | TheCruZ `b9cb34ae55`, `c5b92805c8` | pending: resource cache already has per-key churn accounting; wire version counters if the profile shows it |
+| Reads around GPU writes take the command-processor bytes | TheCruZ `12d76a35d3` | pending: audit `WriteEvidence` |
+| SSE4a red-zone protection | BryKyty `a9e1ae5d91` | not applicable: this tree's SSE4a handler edits the context, not the guest stack |
+| `__rdtsc` via `<x86intrin.h>` | BryKyty `719050e29d` | already builds with MinGW GCC |
+| Presentation 1-2x box filter | BryKyty `6b00e83358` | pending: `PresentationScaler` uses a linear blit |
+| Colour attachments bound by write mask | BryKyty `26d62f802e` | pending: audit `Pipeline`'s attachment/format selection |
+| `KYTY_WRITE_GUARD` | Kyty `72a85b1e8d` | pending: this tree's `WriteEvidence`/pending-write path is the analogue |
+| FSR swapchain teardown order | Kyty `5b48933306` | not applicable: no FSR path in this tree |
+| Legacy `State`/`DepthTarget` | legacy `DepthTarget.*` | pending: rewrite against upstream's `State` (`DepthTarget` now has `VkFormat`/HTILE/slices, no `DepthState`) |
+| StorageAlias wiring | legacy `4d29e7e9fb` | pending: call `AliasBlockCopies` from `writeBackLayers` |
+| DrawAhead/PreparedDraw | legacy `f4...`/`0c...` | blocked: needs legacy `Pm4::StateEffect`/`ApplyRegisterPairs` and `Driver` pipeline declarations |
+| SpirvWaveExchange/NggPassthrough | legacy | blocked: needs legacy `SubgroupMarker*` and `TranslateOptions::subgroupContextMarkers` in the translator |
+
 ## Pinning for the next sync
 
 The recurring pain is that `wolverine-bringup-legacy` and the fork branches carry work the synced
