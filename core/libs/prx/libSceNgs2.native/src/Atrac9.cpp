@@ -81,6 +81,71 @@ static Ngs2WaveformBlock Atrac9Block(std::uint32_t config, std::uint32_t pos, st
     return block;
 }
 
+struct Ps4WaveformBlockWire {
+    std::uint64_t data_offset;
+    std::uint64_t data_size;
+    std::uint32_t num_repeats;
+    std::uint32_t num_skip_samples;
+    std::uint32_t num_samples;
+    std::uint32_t reserved;
+};
+static_assert(sizeof(Ps4WaveformBlockWire) == 32);
+
+struct Ps4WaveformInfoWire {
+    Ngs2WaveformFormat format;
+    std::uint32_t data_offset;
+    std::uint32_t data_size;
+    std::uint32_t loop_begin_position;
+    std::uint32_t loop_end_position;
+    std::uint32_t num_samples;
+    std::uint32_t audio_unit_size;
+    std::uint32_t num_audio_unit_samples;
+    std::uint32_t num_audio_unit_per_frame;
+    std::uint32_t audio_frame_size;
+    std::uint32_t num_audio_frame_samples;
+    std::uint32_t num_delay_samples;
+    std::uint32_t num_blocks;
+    Ps4WaveformBlockWire block[4];
+};
+static_assert(sizeof(Ps4WaveformInfoWire) == 200);
+static_assert(offsetof(Ps4WaveformInfoWire, block) == offsetof(Ngs2WaveformInfo, block));
+
+void Ngs2StoreWaveformBlock(const Ngs2WaveformBlock& block, void* out, bool ps4) {
+    if (!ps4) {
+        std::memcpy(out, &block, sizeof(block));
+        return;
+    }
+    Ps4WaveformBlockWire wire{};
+    wire.data_offset = block.data_offset;
+    wire.data_size = block.data_size;
+    wire.num_repeats = block.num_repeats;
+    wire.num_skip_samples = block.num_skip_samples;
+    wire.num_samples = block.num_samples;
+    wire.reserved = block.reserved;
+    std::memcpy(out, &wire, sizeof(wire));
+}
+
+void Ngs2StoreWaveformInfo(const Ngs2WaveformInfo& info, void* out, bool ps4) {
+    if (!ps4) {
+        std::memcpy(out, &info, sizeof(info));
+        return;
+    }
+    Ps4WaveformInfoWire wire{};
+    std::memcpy(&wire, &info, offsetof(Ps4WaveformInfoWire, block));
+    const std::uint32_t blocks = std::min<std::uint32_t>(info.num_blocks, 4);
+    for (std::uint32_t i = 0; i < blocks; i++) {
+        const auto& source = info.block[i];
+        auto& destination = wire.block[i];
+        destination.data_offset = source.data_offset;
+        destination.data_size = source.data_size;
+        destination.num_repeats = source.num_repeats;
+        destination.num_skip_samples = source.num_skip_samples;
+        destination.num_samples = source.num_samples;
+        destination.reserved = source.reserved;
+    }
+    std::memcpy(out, &wire, sizeof(wire));
+}
+
 void Ngs2Atrac9DecoderDeleter::operator()(void* handle) const {
     Atrac9ReleaseHandle(handle);
 }
@@ -436,24 +501,35 @@ extern "C" {
 
 int APS5_VABI sceNgs2ParseWaveformData(const void* data, size_t data_size, Ngs2WaveformInfo* info) {
     if (info == nullptr) return SCE_NGS2_ERROR_INVALID_OUT_ADDRESS;
-    *info = {};
-    if (data == nullptr) return SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
-    const auto* bytes = static_cast<const std::uint8_t*>(data);
-    RiffChunks chunks;
-    const int result = ReadChunks(data_size, [bytes](std::size_t at, std::size_t) { return bytes + at; }, chunks);
-    if (result != SCE_NGS2_OK) return result;
-    return ParseWaveform(chunks, data_size, *info);
+    Ngs2WaveformInfo parsed{};
+    int result = SCE_NGS2_OK;
+    if (data == nullptr) {
+        result = SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
+    } else {
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        RiffChunks chunks;
+        result = ReadChunks(data_size, [bytes](std::size_t at, std::size_t) { return bytes + at; }, chunks);
+        if (result == SCE_NGS2_OK) result = ParseWaveform(chunks, data_size, parsed);
+    }
+    Ngs2StoreWaveformInfo(parsed, info, Ngs2Ps4Process());
+    return result;
 }
 
 int APS5_VABI sceNgs2ParseWaveformFile(const char* path, uint32_t offset, Ngs2WaveformInfo* info) {
     if (info == nullptr) return SCE_NGS2_ERROR_INVALID_OUT_ADDRESS;
-    *info = {};
-    if (path == nullptr) return SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
+    Ngs2WaveformInfo parsed{};
+    if (path == nullptr) {
+        Ngs2StoreWaveformInfo(parsed, info, Ngs2Ps4Process());
+        return SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
+    }
     const auto host = ResolvePath_nid_no_patch(path);
     std::ifstream file(host, std::ios::binary | std::ios::ate);
     if (!file) throw std::runtime_error(std::string(__func__) + ": cannot open " + host.string());
     const auto fileSize = static_cast<std::uint64_t>(file.tellg());
-    if (offset > fileSize) return SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
+    if (offset > fileSize) {
+        Ngs2StoreWaveformInfo(parsed, info, Ngs2Ps4Process());
+        return SCE_NGS2_ERROR_INVALID_WAVEFORM_DATA;
+    }
     const auto length = static_cast<std::size_t>(fileSize - offset);
     const std::string function = __func__;
     std::vector<std::vector<std::uint8_t>> pieces;
@@ -465,29 +541,37 @@ int APS5_VABI sceNgs2ParseWaveformFile(const char* path, uint32_t offset, Ngs2Wa
     };
     RiffChunks chunks;
     int result = ReadChunks(length, readBytes, chunks);
-    if (result == SCE_NGS2_OK) result = ParseWaveform(chunks, length, *info);
-    if (result != SCE_NGS2_OK) return result;
-    info->data_offset += offset;
-    for (std::uint32_t i = 0; i < info->num_blocks; i++) info->block[i].data_offset += offset;
+    if (result == SCE_NGS2_OK) result = ParseWaveform(chunks, length, parsed);
+    if (result != SCE_NGS2_OK) {
+        Ngs2StoreWaveformInfo(parsed, info, Ngs2Ps4Process());
+        return result;
+    }
+    parsed.data_offset += offset;
+    for (std::uint32_t i = 0; i < parsed.num_blocks; i++) parsed.block[i].data_offset += offset;
+    Ngs2StoreWaveformInfo(parsed, info, Ngs2Ps4Process());
     return SCE_NGS2_OK;
 }
 
 int APS5_VABI sceNgs2CalcWaveformBlock(const Ngs2WaveformFormat* format, uint32_t sample_pos, uint32_t num_samples, Ngs2WaveformBlock* block) {
     if (block == nullptr) return SCE_NGS2_ERROR_INVALID_OUT_ADDRESS;
-    *block = {};
-    if (format == nullptr) return SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT;
-    const auto type = format->waveform_type;
-    if (IsPcmType(type)) {
-        *block = PcmBlock(type, format->num_channels, sample_pos, num_samples);
-        return SCE_NGS2_OK;
+    Ngs2WaveformBlock calculated{};
+    int result = SCE_NGS2_OK;
+    if (format == nullptr) {
+        result = SCE_NGS2_ERROR_INVALID_WAVEFORM_FORMAT;
+    } else {
+        const auto type = format->waveform_type;
+        if (IsPcmType(type)) {
+            calculated = PcmBlock(type, format->num_channels, sample_pos, num_samples);
+        } else if (type == WAVEFORM_TYPE_VAG) {
+            calculated = VagBlock(format->num_channels, sample_pos, num_samples);
+        } else if (type != SCE_NGS2_WAVEFORM_TYPE_ATRAC9) {
+            result = SCE_NGS2_ERROR_UNKNOWN_WAVEFORM_FORMAT;
+        } else {
+            calculated = Atrac9Block(format->config_data, sample_pos, num_samples);
+        }
     }
-    if (type == WAVEFORM_TYPE_VAG) {
-        *block = VagBlock(format->num_channels, sample_pos, num_samples);
-        return SCE_NGS2_OK;
-    }
-    if (type != SCE_NGS2_WAVEFORM_TYPE_ATRAC9) return SCE_NGS2_ERROR_UNKNOWN_WAVEFORM_FORMAT;
-    *block = Atrac9Block(format->config_data, sample_pos, num_samples);
-    return SCE_NGS2_OK;
+    Ngs2StoreWaveformBlock(calculated, block, Ngs2Ps4Process());
+    return result;
 }
 
 int APS5_VABI sceNgs2GetWaveformFrameInfo(const Ngs2WaveformFormat* format, uint32_t* out_frame_size, uint32_t* out_num_frame_samples, uint32_t* out_units_per_frame, uint32_t* out_num_delay_samples) {

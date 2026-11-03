@@ -401,5 +401,8 @@ int Ngs2GeomResetListenerParam(Ngs2GeomListenerParam* out_listener_param);
 int Ngs2GeomCalcListener(const Ngs2GeomListenerParam* param, Ngs2GeomListenerWork* outWork, std::uint32_t flags);
 int Ngs2GeomApply(const Ngs2GeomListenerWork* listener, const Ngs2GeomSourceParam* source, Ngs2GeomAttribute* outAttrib, std::uint32_t flags);
 int Ngs2GeomResetSourceParam(Ngs2GeomSourceParam* out_source_param);
+bool Ngs2Ps4Process();
+void Ngs2StoreWaveformInfo(const Ngs2WaveformInfo& info, void* out, bool ps4);
+void Ngs2StoreWaveformBlock(const Ngs2WaveformBlock& block, void* out, bool ps4);
 
 #endif
