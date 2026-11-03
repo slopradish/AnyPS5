@@ -40,10 +40,14 @@ struct TranslateOptions {
     bool float32DenormPreserve = false;
     bool float64 = false;
     bool gcnLegacyVertexInputs = false;
+    bool subgroupContextMarkers = false;
     std::optional<ShaderFloatMode> floatMode;
     ShaderStageInputInfo inputInfo;
     const EmbeddedFetchPlan* embeddedFetch = nullptr;
 };
+
+inline constexpr std::uint32_t SubgroupMarkerFirstRegister = NumScalarRegs;
+inline constexpr std::uint32_t SubgroupMarkerVectorOffset = 8u;
 
 class InstructionTranslator {
 public:
