@@ -31,11 +31,24 @@ void SetregImmKeepsItsLiteral() {
     Check(Decode(movk).wordCount == 1u, "s_movk_i32 took a literal word");
 }
 
+void CmpxKeepsBothMasks() {
+    const std::array<std::uint32_t, 2> cmpx{0x7da80200u, 0xbf810000u};
+    const auto instruction = Decode(cmpx);
+    Check(instruction.op == RdnaOpcode::VCmpxGtU32, "v_cmpx_gt_u32 did not decode as its RDNA opcode");
+    Check(instruction.destination.kind == RdnaOperandKind::ExecLo, "a GCN v_cmpx does not mask EXEC");
+    Check(instruction.wordCount == 1u, "a GCN v_cmpx is not one source word");
+    const std::array<std::uint32_t, 3> vop3{0xd1a80000u, 0x00000200u, 0xbf810000u};
+    const auto encoded = Decode(vop3);
+    Check(encoded.op == RdnaOpcode::VCmpxGtU32, "a VOP3 v_cmpx_gt_u32 did not decode as its RDNA opcode");
+    Check(encoded.wordCount == 2u, "a GCN VOP3 v_cmpx is not two source words");
+}
+
 }
 
 int main() {
     try {
         SetregImmKeepsItsLiteral();
+        CmpxKeepsBothMasks();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
         return 1;
