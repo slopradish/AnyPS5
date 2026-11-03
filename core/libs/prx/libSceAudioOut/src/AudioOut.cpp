@@ -361,6 +361,18 @@ static void queueAudio(Port& port, const void* data, std::unique_lock<std::mutex
         queueSize = checkedBufferSize(port.samplesNum, channels, bytesPerSample(port.format));
     }
 
+    static const char* dumpPath = std::getenv("APS5_DUMP_AUDIO_OUT");
+    if (dumpPath != nullptr && port.type == PORT_TYPE_MAIN) {
+        static std::FILE* dump = nullptr;
+        static std::uint64_t written = 0;
+        const auto bytesPerFrame = static_cast<std::uint64_t>(queueSize) / port.samplesNum;
+        if (dump == nullptr) dump = std::fopen(dumpPath, "wb");
+        if (dump != nullptr && written < static_cast<std::uint64_t>(port.freq) * 60ull * bytesPerFrame) {
+            std::fwrite(queueData, 1, queueSize, dump);
+            written += queueSize;
+        }
+    }
+
     const std::uint64_t bufferUs = port.freq != 0
         ? (1000000ULL * port.samplesNum) / port.freq
         : 0;
