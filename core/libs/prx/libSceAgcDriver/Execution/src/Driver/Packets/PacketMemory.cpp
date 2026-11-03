@@ -64,6 +64,27 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
     const auto interruptSelect = opcode == 0x49 ? (packet[2] >> 24u) & 7u : 0u;
     endOfPipeInterrupt = interruptSelect != 0 && interruptSelect != 3;
     interruptDeferred = false;
+    if (opcode == 0x49) {
+        if (const auto stamp = Pm4::DecodeTimestampWrite(packet)) {
+            drawPacket = false;
+            sampleDump = false;
+            wroteOnGpu = true;
+            GuestMemory::TagGpuLockSite(GuestMemory::GpuLockSite::Label);
+            std::lock_guard gpuLock(GuestMemory::GpuMutex());
+            if (device == nullptr) device = std::make_shared<VulkanDevice>();
+            const auto localDevice = device.Load();
+            recordDeferredLabels(localDevice.get(), submission.queue);
+            const bool workOpen = Graphics::Recorder::RecordedWorkSinceSubmit() != 0;
+            localDevice->WriteTimestampOnGpu(stamp->address, stamp->bytes, stamp->stage, submission.queue);
+            ++immediateLabels;
+            if (endOfPipeInterrupt) {
+                const auto queueId = submission.queue;
+                interruptDeferred = localDevice->AfterRecordedWork([this, queueId] { deliverGuestEopInterrupt(queueId); }, submission.queue == 0);
+                if (interruptDeferred && workOpen) localDevice->SubmitRecorded(submission.queue == 0);
+            }
+            return false;
+        }
+    }
     if (!drainAll && endOfPipeInterrupt) {
         const auto label = Pm4::DecodeLabelWrite(packet);
         const bool storesNothing = (packet[2] >> 29u) == 0 || (packet[3] | (static_cast<std::uint64_t>(packet[4]) << 32u)) == 0;

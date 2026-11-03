@@ -513,6 +513,12 @@ public:
     std::uint32_t BeginInPassGpuTiming(std::uint64_t key);
     // `bytes`: what the range moved (a fill's, a copy's), summed per key on the [gputime] line.
     void EndGpuTiming(std::uint32_t index, std::uint64_t bytes = 0);
+    struct TimestampQuery {
+        VkQueryPool handle = VK_NULL_HANDLE;
+        std::uint32_t slot = 0;
+    };
+    TimestampQuery WriteTimestamp(VkPipelineStageFlagBits stage);
+    std::uint64_t ReadTimestamp(const TimestampQuery& query);
     // The key of the whole-batch range (first to last command; reported as "batch" on the [gputime]
     // line, apart from the per-program totals).
     static constexpr std::uint64_t BatchTimingKey = 0x3;
@@ -907,6 +913,8 @@ private:
     VkDeviceSize drawUploadUsed = 0;
     std::vector<VkFence> spare;
     std::vector<VkQueryPool> sparePools;
+    VkQueryPool timestampQueries = VK_NULL_HANDLE;
+    std::uint32_t timestampNext = 0;
     mutable AgcDriver::Mutex completedMutex;
     std::array<Completed, CompletedRingSize> completed;
     std::uint64_t newestSubmitted = 0;

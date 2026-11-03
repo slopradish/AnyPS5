@@ -4,6 +4,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Mutex.hpp"
 #include "prx/libc/include/HostThreadLocal.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GpuClock.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/BdaResources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ReferenceStorage.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
@@ -1198,6 +1199,10 @@ Recorder::~Recorder() {
     ForgetHtileMasks_nid_no_patch(id);
     progressWatcher.reset();
     holdKept.clear();
+    if (timestampQueries != VK_NULL_HANDLE) {
+        context.Function<PFN_vkDestroyQueryPool>("vkDestroyQueryPool")(context.device, timestampQueries, nullptr);
+        timestampQueries = VK_NULL_HANDLE;
+    }
     if (activeRecorder == this) {
         activeRecorder = nullptr;
         pendingWrites.store(nullptr, std::memory_order_release);
@@ -2236,6 +2241,29 @@ void Recorder::EndGpuTiming(std::uint32_t index, std::uint64_t bytes) {
     if (index == NoTiming || open == nullptr || open->queries == VK_NULL_HANDLE) return;
     if (index < open->timedBytes.size()) open->timedBytes[index] += bytes;
     context.Function<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(open->commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, open->queries, index * 2 + 1);
+}
+
+Recorder::TimestampQuery Recorder::WriteTimestamp(VkPipelineStageFlagBits stage) {
+    ensureOpen();
+    constexpr std::uint32_t Slots = 1024;
+    if (timestampQueries == VK_NULL_HANDLE) {
+        VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        info.queryCount = Slots;
+        Check(context.Function<PFN_vkCreateQueryPool>("vkCreateQueryPool")(context.device, &info, nullptr, &timestampQueries), "vkCreateQueryPool GPU timestamp");
+    }
+    const auto slot = timestampNext++ % Slots;
+    function(cmdResetQueryPool, "vkCmdResetQueryPool")(open->commands, timestampQueries, slot, 1);
+    context.Function<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(open->commands, stage, timestampQueries, slot);
+    return {timestampQueries, slot};
+}
+
+std::uint64_t Recorder::ReadTimestamp(const TimestampQuery& query) {
+    Require(query.handle != VK_NULL_HANDLE, "a GPU timestamp read without its query");
+    std::uint64_t value = 0;
+    Check(context.Function<PFN_vkGetQueryPoolResults>("vkGetQueryPoolResults")(context.device, query.handle, query.slot, 1, sizeof(value), &value, sizeof(value), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "vkGetQueryPoolResults GPU timestamp");
+    const auto period = context.limits.timestampPeriod > 0.0f ? context.limits.timestampPeriod : 1.0f;
+    return GpuClock::ToGuest(GpuClock::MakeMapping(static_cast<double>(period), 0, 0), value);
 }
 
 bool Recorder::RecordDispatchArguments(VkCommandBuffer commands, VkDeviceAddress source, VkDeviceAddress arguments, const std::array<std::uint32_t, 3>* threadGroup) {
