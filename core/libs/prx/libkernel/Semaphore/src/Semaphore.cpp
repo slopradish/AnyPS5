@@ -92,7 +92,7 @@ int APS5_VABI sceKernelSignalSema(KernelSema handle, int count) {
  }
  const auto before = sem->tokenCount;
  sem->tokenCount += count;
- if (TraceSync()) std::fprintf(stderr, "[sema] signal %p '%s' count=%d have=%d->%d\n", static_cast<void*>(handle), sem->name.c_str(), count, before, sem->tokenCount);
+ if (TraceSync()) std::fprintf(stderr, "[sema] signal %p '%s' count=%d have=%d->%d caller=%p\n", static_cast<void*>(handle), sem->name.c_str(), count, before, sem->tokenCount, __builtin_return_address(0));
  for (auto it = sem->queue.begin(); it != sem->queue.end();) {
   KernelSemaWaiter* waiter = *it;
   if (waiter->need > sem->tokenCount) {
