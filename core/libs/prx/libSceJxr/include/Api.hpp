@@ -2,6 +2,7 @@
 
 #include "SceTypes.hpp"
 #include "prx/libSceJxr/GuestPixelInfo.h"
+#include "prx/libSceJxr/include/GuidExports.hpp"
 #include "prx/libSceJxr/Stream.hpp"
 #include "prx/libSceJxr/include/Metadata.hpp"
 
@@ -39,7 +40,7 @@ int APS5_VABI PKCreateFactory_Release_nid_postfix();
 int APS5_VABI PKCreateFactory_nid_postfix();
 std::int64_t APS5_VABI PKFormatConverter_Convert_nid_postfix(void* converter, const void* rect, std::uint8_t* pixels, std::uint32_t stride);
 int APS5_VABI PKFormatConverter_Copy_nid_postfix();
-int APS5_VABI PKFormatConverter_EnumConversions_nid_postfix();
+std::int64_t APS5_VABI PKFormatConverter_EnumConversions_nid_postfix(const JxrGuestGuid* source, std::uint32_t index, const JxrGuestGuid** target);
 int APS5_VABI PKFormatConverter_GetPixelFormat_nid_postfix();
 int APS5_VABI PKFormatConverter_GetResolution_nid_postfix();
 int APS5_VABI PKFormatConverter_GetSize_nid_postfix();
