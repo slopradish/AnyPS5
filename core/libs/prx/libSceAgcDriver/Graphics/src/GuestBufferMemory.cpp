@@ -4472,9 +4472,14 @@ const HostImport* HostImportForCached(const Context& context, std::uint64_t addr
     settleUnwatchedImports(context, state);
 #endif
     if (cache.import != nullptr && cache.address == address && cache.bytes == bytes && cache.epoch == state.epoch && cache.inserts == state.inserted && !importsStale(context, state)) {
-        cache.import->lastUse = ++state.useCounter;
-        cache.import->lastUse = ++state.useCounter;
-        return cache.import;
+        // Verify the cached import is still in the registry. Memory freed and
+        // re-allocated at the same address may not increment epoch/inserts.
+        auto it = state.imports.find(cache.import->base);
+        if (it != state.imports.end() && &it->second == cache.import && it->second.serial == cache.import->serial) {
+            cache.import->lastUse = ++state.useCounter;
+            return cache.import;
+        }
+        cache = {};
     }
     const auto* entry = hostImportSettled(context, state, address, bytes, ImportRequester::Access);
     if (entry != nullptr && !importsStale(context, state)) cache = {entry, address, bytes, state.epoch, state.inserted};
