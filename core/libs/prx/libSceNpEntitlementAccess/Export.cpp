@@ -69,7 +69,9 @@ const std::vector<NpEntitlementAccessAddcontEntitlementInfo>& OwnedAddons() {
             line.erase(std::min(line.find_first_of("#;"), line.size()));
             const auto first = line.find_first_not_of(" \t\r");
             if (first == std::string::npos) continue;
-            const auto label = line.substr(first, line.find_last_not_of(" \t\r") + 1 - first);
+            const auto trimmed = line.substr(first, line.find_last_not_of(" \t\r") + 1 - first);
+            const auto delimiter = trimmed.find_first_of("= \t");
+            const auto label = delimiter == std::string::npos ? trimmed : trimmed.substr(0, delimiter);
             NpEntitlementAccessAddcontEntitlementInfo info{};
             if (label.size() >= sizeof(info.entitlement_label.data)) throw std::runtime_error("NpEntitlementAccess: entitlement label '" + label + "' in " + path.string() + " is longer than 16 characters");
             std::memcpy(info.entitlement_label.data, label.data(), label.size());
