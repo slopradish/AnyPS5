@@ -727,7 +727,7 @@ void GuestArenaReset_nid_postfix(void* pointer, std::size_t bytes) {
 }
 
 void GuestArenaMap_nid_postfix(void* pointer, std::size_t bytes, void* section, std::uint64_t offset, std::uint32_t protection) {
-    if (!Arena::Get().Contains(pointer, bytes)) throw OutsideArena("shared mapping", pointer, bytes);
+    if (!Arena::Get().Contains(pointer, bytes)) return;
     WindowsMappings::Get().Map(pointer, bytes, section, offset, protection, Arena::Get().WriteWatched(), false);
     noteAccess(pointer, bytes);
 }
