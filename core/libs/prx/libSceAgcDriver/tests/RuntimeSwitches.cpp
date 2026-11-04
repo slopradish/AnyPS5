@@ -55,7 +55,8 @@ void parse() {
     Require(config.switches.size() == 1 && config.switches[0] == RuntimeSwitch::NoBarrierBatch, "the switch list was not parsed");
     const auto bySeconds = AbSchedule::Parse("60:APS5_NO_BARRIER_BATCH", "90s", "");
     Require(bySeconds.startSeconds == 90.0 && bySeconds.settleSeconds == 2 && bySeconds.startPresent == 0, "a start in seconds was not parsed");
-    Require(Refusal("60:APS5_FULL_BARRIERS").find("APS5_FULL_BARRIERS cannot change while the title runs; switches the A/B can change: APS5_NO_BARRIER_BATCH") != std::string::npos, "a startup-only variable was not refused with the list of switches");
+    const auto refusal = Refusal("60:APS5_FULL_BARRIERS");
+    Require(refusal.find(std::string("APS5_FULL_BARRIERS cannot change while the title runs; switches the A/B can change: ") + RuntimeSwitches::Name(static_cast<RuntimeSwitch>(0))) != std::string::npos && refusal.find(RuntimeSwitches::Name(RuntimeSwitch::NoBarrierBatch)) != std::string::npos, "a startup-only variable was not refused with the list of switches");
     Require(Refusal("60:APS5_NO_BARRIER_BATCH+APS5_NO_BARRIER_BATCH").find("listed twice") != std::string::npos, "a duplicate switch was not refused");
     Require(Refusal("60:+APS5_NO_BARRIER_BATCH").find("empty switch name") != std::string::npos && Refusal("60:APS5_NO_BARRIER_BATCH+").find("empty switch name") != std::string::npos, "an empty switch name was not refused");
     Require(Refusal("60:").find("no switch listed") != std::string::npos, "an empty switch list was not refused");

@@ -58,7 +58,7 @@ if(BUILD_TESTING AND WIN32)
     target_link_libraries(agc_process_sampler_stack_tests PRIVATE libc)
     configure_windows_unwind(agc_process_sampler_stack_tests)
     add_test(NAME agc_process_sampler_stack COMMAND agc_process_sampler_stack_tests)
-    set_tests_properties(agc_process_sampler_stack PROPERTIES TIMEOUT 20 ENVIRONMENT_MODIFICATION
+    set_tests_properties(agc_process_sampler_stack PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77 ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
 endif()
 

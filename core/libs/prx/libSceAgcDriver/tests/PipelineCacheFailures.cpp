@@ -126,9 +126,11 @@ int main(int argc, char** argv) {
     } cleanup{root};
 #ifdef _WIN32
     _putenv_s("ANYPS5_NO_SHADER_CACHE", "0");
+    _putenv_s("APS5_PIPELINE_CACHE_SAVE_S", "1");
     _wputenv_s(L"ANYPS5_SHADER_CACHE_DIR", root.wstring().c_str());
 #else
     setenv("ANYPS5_NO_SHADER_CACHE", "0", 1);
+    setenv("APS5_PIPELINE_CACHE_SAVE_S", "1", 1);
     setenv("ANYPS5_SHADER_CACHE_DIR", root.string().c_str(), 1);
 #endif
     Context context{};
