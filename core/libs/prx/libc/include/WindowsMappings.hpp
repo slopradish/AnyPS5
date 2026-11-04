@@ -227,7 +227,7 @@ public:
     // Wolverine stack (fork ce3be64b4): read-only pages that read as zeros, all views of one
     // pagefile-backed page nothing writes, so the range costs one physical page however large. A
     // private commit takes a page for each one read: an AMM PRT range's unbacked pages are
-    // gigabytes that the GPU path imports and reads (PPSA03671 grew ~1.5 GB a minute without this).
+    // gigabytes that the GPU path imports and reads (grew ~1.5 GB a minute without this).
     void MapZero(void* address, std::size_t bytes) {
         std::lock_guard lock(mutex);
         collectableRanges.clear();
