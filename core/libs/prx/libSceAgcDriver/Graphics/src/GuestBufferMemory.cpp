@@ -4505,7 +4505,7 @@ const HostImport* HostImportForCached(const Context& context, std::uint64_t addr
         // Verify the cached import is still in the registry. Memory freed and
         // re-allocated at the same address may not increment epoch/inserts.
         auto it = state.imports.find(cache.import->base);
-        if (it != state.imports.end() && &it->second == cache.import && it->second.serial == cache.import->serial && cache.import->alias != nullptr) {
+        if (it != state.imports.end() && &it->second == cache.import && it->second.serial == cache.import->serial && cache.import->alias != nullptr && cache.import->buffer != VK_NULL_HANDLE) {
             cache.import->lastUse = ++state.useCounter;
             return cache.import;
         }
