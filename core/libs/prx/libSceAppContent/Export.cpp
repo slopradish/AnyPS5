@@ -15,6 +15,13 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <fstream>
+#include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 static constexpr int SCE_APP_CONTENT_ERROR_NOT_INITIALIZED = static_cast<int>(0x80D90001);
 static constexpr int SCE_APP_CONTENT_ERROR_PARAMETER = static_cast<int>(0x80D90002);
@@ -64,6 +71,92 @@ bool IsTemporaryMountPoint(const AppContentMountPoint* mountPoint) {
 
 }
 
+#ifdef _WIN32
+const wchar_t* ConfiguredEntitlements() { return _wgetenv(L"ANYPS5_ENTITLEMENTS"); }
+#else
+const char* ConfiguredEntitlements() { return std::getenv("ANYPS5_ENTITLEMENTS"); }
+#endif
+
+std::filesystem::path EntitlementsPath() {
+    if (const auto* configured = ConfiguredEntitlements(); configured != nullptr && configured[0] != 0) return configured;
+#ifdef _WIN32
+    wchar_t module[MAX_PATH];
+    const auto length = GetModuleFileNameW(nullptr, module, MAX_PATH);
+    if (length == 0 || length == MAX_PATH) throw std::runtime_error("AppContent: cannot locate the executable");
+    return std::filesystem::path(module).parent_path() / "anyps5-entitlements.ini";
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> executable(size);
+    std::error_code error;
+    std::filesystem::path path;
+    if (_NSGetExecutablePath(executable.data(), &size) == 0) path = std::filesystem::canonical(executable.data(), error);
+    if (path.empty()) throw std::runtime_error("AppContent: cannot locate the executable");
+    return path.parent_path() / "anyps5-entitlements.ini";
+#else
+    return std::filesystem::read_symlink("/proc/self/exe").parent_path() / "anyps5-entitlements.ini";
+#endif
+}
+
+struct AddonEntry {
+    AppContentAddcontInfo info;
+    std::string mount_point;
+    bool mounted = false;
+};
+
+std::mutex addcontMutex;
+
+std::vector<AddonEntry>& AddonEntries() {
+    static auto entries = [] {
+        std::vector<AddonEntry> list;
+        const auto path = EntitlementsPath();
+        std::ifstream file(path);
+        if (!file) {
+            return list;
+        }
+        std::string line;
+        std::size_t index = 0;
+        while (std::getline(file, line)) {
+            line.erase(std::min(line.find_first_of("#;"), line.size()));
+            const auto first = line.find_first_not_of(" \t\r");
+            if (first == std::string::npos) continue;
+            const auto trimmed = line.substr(first, line.find_last_not_of(" \t\r") + 1 - first);
+            const auto delimiter = trimmed.find_first_of("= \t");
+            const auto label = delimiter == std::string::npos ? trimmed : trimmed.substr(0, delimiter);
+            AddonEntry entry{};
+            if (label.size() >= sizeof(entry.info.entitlement_label.data)) continue;
+            std::memcpy(entry.info.entitlement_label.data, label.data(), label.size());
+            entry.info.status = 1;
+            if (delimiter != std::string::npos) {
+                const auto mountStart = trimmed.find_first_not_of("= \t", delimiter);
+                if (mountStart != std::string::npos) {
+                    entry.mount_point = trimmed.substr(mountStart);
+                }
+            }
+            if (entry.mount_point.empty()) {
+                char defaultMount[16];
+                std::snprintf(defaultMount, sizeof(defaultMount), "/addcont%zu", index);
+                entry.mount_point = defaultMount;
+            }
+            list.push_back(entry);
+            ++index;
+        }
+        return list;
+    }();
+    return entries;
+}
+
+const std::vector<AppContentAddcontInfo>& OwnedAddons() {
+    static const auto list = [] {
+        std::vector<AppContentAddcontInfo> result;
+        for (const auto& entry : AddonEntries()) {
+            result.push_back(entry.info);
+        }
+        return result;
+    }();
+    return list;
+}
+
 static void ClearDirectory(const std::filesystem::path& directory) {
     for (const auto& entry : std::filesystem::directory_iterator(directory)) RemoveTree(entry.path());
     RecordWrittenPath_nid_no_patch(directory);
@@ -101,16 +194,33 @@ int APS5_VABI sceAppContentGetPlayableStatus(uint32_t serviceLabel, const NpUnif
 
 int APS5_VABI sceAppContentAddcontMount(uint32_t service_label, const NpUnifiedEntitlementLabel* entitlement_label, AppContentMountPoint* mount_point) {
     if (!initialized.load()) return SCE_APP_CONTENT_ERROR_NOT_INITIALIZED;
- (void)service_label;
- if (!entitlement_label || !mount_point) return SCE_APP_CONTENT_ERROR_PARAMETER;
+    (void)service_label;
+    if (!entitlement_label || !mount_point) return SCE_APP_CONTENT_ERROR_PARAMETER;
     if (!validEntitlementLabel(*entitlement_label, 0x01500000)) return SCE_APP_CONTENT_ERROR_PARAMETER;
- return SCE_APP_CONTENT_ERROR_NOT_FOUND;
+    std::lock_guard lock(addcontMutex);
+    for (auto& addon : AddonEntries()) {
+        if (std::strncmp(addon.info.entitlement_label.data, entitlement_label->data, sizeof(entitlement_label->data)) == 0) {
+            if (addon.mounted) return SCE_APP_CONTENT_ERROR_BUSY;
+            addon.mounted = true;
+            std::memset(mount_point->data, 0, sizeof(mount_point->data));
+            std::strncpy(mount_point->data, addon.mount_point.c_str(), sizeof(mount_point->data) - 1);
+            return 0;
+        }
+    }
+    return SCE_APP_CONTENT_ERROR_NOT_FOUND;
 }
 
 int APS5_VABI sceAppContentAddcontUnmount(const AppContentMountPoint* mount_point) {
     if (!initialized.load()) return SCE_APP_CONTENT_ERROR_NOT_INITIALIZED;
- if (!mount_point) return SCE_APP_CONTENT_ERROR_PARAMETER;
- return SCE_APP_CONTENT_ERROR_NOT_FOUND;
+    if (!mount_point) return SCE_APP_CONTENT_ERROR_PARAMETER;
+    std::lock_guard lock(addcontMutex);
+    for (auto& addon : AddonEntries()) {
+        if (addon.mounted && std::strncmp(addon.mount_point.c_str(), mount_point->data, sizeof(mount_point->data)) == 0) {
+            addon.mounted = false;
+            return 0;
+        }
+    }
+    return SCE_APP_CONTENT_ERROR_NOT_FOUND;
 }
 
 int APS5_VABI sceAppContentGetAddcontInfo(uint32_t service_label, const NpUnifiedEntitlementLabel* entitlement_label, AppContentAddcontInfo* info) {
@@ -118,6 +228,13 @@ int APS5_VABI sceAppContentGetAddcontInfo(uint32_t service_label, const NpUnifie
     (void)service_label;
     if (!entitlement_label || !info) return SCE_APP_CONTENT_ERROR_PARAMETER;
     if (!validEntitlementLabel(*entitlement_label, 0x01500000)) return SCE_APP_CONTENT_ERROR_PARAMETER;
+    std::lock_guard lock(addcontMutex);
+    for (const auto& addon : AddonEntries()) {
+        if (std::strncmp(addon.info.entitlement_label.data, entitlement_label->data, sizeof(entitlement_label->data)) == 0) {
+            *info = addon.info;
+            return 0;
+        }
+    }
     return SCE_APP_CONTENT_ERROR_DRM_NO_ENTITLEMENT;
 }
 
@@ -125,7 +242,14 @@ int APS5_VABI sceAppContentGetAddcontInfoList(uint32_t serviceLabel, AppContentA
     if (!initialized.load()) return SCE_APP_CONTENT_ERROR_NOT_INITIALIZED;
     (void)serviceLabel;
     if (!hitNum) return SCE_APP_CONTENT_ERROR_PARAMETER;
-    *hitNum = 0;
+    std::lock_guard lock(addcontMutex);
+    const auto& entries = AddonEntries();
+    *hitNum = static_cast<uint32_t>(entries.size());
+    if (list && listNum > 0) {
+        for (std::size_t i = 0; i < std::min<std::size_t>(listNum, entries.size()); ++i) {
+            list[i] = entries[i].info;
+        }
+    }
     return 0;
 }
 
@@ -334,6 +458,12 @@ int APS5_VABI sceAppContentUnknown_SWVxsi_ZBlw(void) {
 int APS5_VABI sceAppContentGetAddcontInfoByEntitlementId(const char* entitlementId, AppContentAddcontInfo* info) {
     if (!initialized.load()) return SCE_APP_CONTENT_ERROR_NOT_INITIALIZED;
     if (!entitlementId || !info) return SCE_APP_CONTENT_ERROR_PARAMETER;
+    for (const auto& addon : OwnedAddons()) {
+        if (std::strncmp(addon.entitlement_label.data, entitlementId, sizeof(addon.entitlement_label.data)) == 0) {
+            *info = addon;
+            return 0;
+        }
+    }
     return SCE_APP_CONTENT_ERROR_DRM_NO_ENTITLEMENT;
 }
 
@@ -341,7 +471,11 @@ int APS5_VABI sceAppContentGetAddcontInfoListByIroTag(uint32_t iroTag, AppConten
     if (!initialized.load()) return SCE_APP_CONTENT_ERROR_NOT_INITIALIZED;
     (void)iroTag;
     if ((!list || listNum == 0) && !hitNum) return SCE_APP_CONTENT_ERROR_PARAMETER;
-    if (hitNum) *hitNum = 0;
+    const auto& owned = OwnedAddons();
+    if (hitNum) *hitNum = static_cast<uint32_t>(owned.size());
+    if (list && listNum > 0) {
+        std::copy_n(owned.begin(), std::min<std::size_t>(listNum, owned.size()), list);
+    }
     return 0;
 }
 
