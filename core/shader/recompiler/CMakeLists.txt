@@ -108,6 +108,7 @@ ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Translation/src/NggPassthrough.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/ReadLaneEliminator.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/MaskedSelectEliminator.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/TessellationLowering.cpp
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/QuadHelperProof.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/ResourceTracker.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/ResourceMaterializer.cpp
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/src/BindingAllocator.cpp
