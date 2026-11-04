@@ -2,11 +2,21 @@
 
 ### Functional
 
-- [Cairo affine matrices](../../../core/libs/prx/libcairo/Matrix.cpp) - Ten pure affine operations implement the documented [Cairo matrix API](https://www.cairographics.org/manual/cairo-cairo-matrix-t.html), including multiplication with aliased outputs, singular inversion status and point/distance transforms. The 48-byte `cairo_matrix_t` layout and C signatures are public; the PS5 library revision and native behavior have not been measured. These functions do not require the other 151 pending surface, font or rendering exports.
+- [Cairo affine matrices](../../../core/libs/prx/libcairo/Matrix.cpp) - Ten pure affine operations implement the documented [Cairo matrix API](https://www.cairographics.org/manual/cairo-cairo-matrix-t.html), including multiplication with aliased outputs, singular inversion status and point/distance transforms. The 48-byte `cairo_matrix_t` layout and C signatures are public; the PS5 library revision and native behavior have not been measured. These functions do not require the other 132 pending surface, font or rendering exports.
+
+- [Surface.cpp](../../../core/libs/prx/libcairo/Surface.cpp) does not yet provide a rasterizer or console-verified surface semantics. Its 19 image/surface/stride exports support owned and borrowed pixels, surface references, format, stride, scale, subsurfaces and error surfaces; CPU flush/mark-dirty do not perform deferred device synchronization.
+
+- [Context.cpp](../../../core/libs/prx/libcairo/Context.cpp) does not yet support drawing or rasterization. Its seventeen context lifecycle, matrix save/restore and coordinate-transform exports retain an owned surface reference and sticky error state, depend on the image/surface lifecycle and use guest System V calling conventions.
+
+- [Graphics state in Context.cpp](../../../core/libs/prx/libcairo/Context.cpp) has no rendering or clipping consumer yet. Fifteen getters/setters store antialias, fill rule, caps, joins, widths, limits and dashes; save/restore copies dash arrays and error inputs set sticky INVALID_DASH.
+
+- [Path data in Context.cpp](../../../core/libs/prx/libcairo/Context.cpp) has no renderer yet. Eleven lifecycle and current-point exports quantize to 24.8 device coordinates, canonicalize forward-collinear segments, deep-copy public path data and append through the current CTM and surface scale; save/restore keeps paths independent. The path-extents export bounds line segments and cubic extrema in device space, then converts to user coordinates. `cairo_arc` and `cairo_arc_negative` generate tolerance-dependent cubic subdivisions matching native Cairo 1.18 path coordinates for tested positive, negative, zero, wrapped and transformed arcs. The 0.1 default tolerance is fixed because `cairo_set_tolerance` is not exported; console behavior and rasterization remain unverified.
+
+- [Operator state and rectangle paths in Context.cpp](../../../core/libs/prx/libcairo/Context.cpp) cannot yet draw rectangles or consume the stored operator: paint, clip, stroke and fill exports remain throwing. The OVER-default operator preserves save/restore state, and rectangle paths use quantized device displacements and close-path canonicalization. Native Cairo 1.18 is the comparison target; PS5 firmware behavior is unmeasured.
 
 ### Callable exports
 
-- [Callable exports](../../../core/libs/prx/libcairo/Export.cpp) - 151 remaining callable NIDs match the [public 3.20 catalogue](https://github.com/DNNDHH/PS5-3.20_Libs/blob/b2a77c09cd71c01f34c790cfbe98c751a13262ad/libcairo.c) and [selected export metadata](https://gist.github.com/kyon-eth/a0bb48f2b3070a5eac8a638810f195f2/a3838ac54ebcc0bbfeb3cc46002a9a2dcce4dbdc) from two version-labelled images (SHA-256 `ec2158e0c5875316d200037d7f4bc48861626451752523f6930d687307c75ef8`). The labels are not authenticated. Prototypes and behavior of these remaining declarations are unverified; they still throw through `NotImplemented_nid_no_patch`.
+- [Callable exports](../../../core/libs/prx/libcairo/Export.cpp) - 83 NIDs still throw; the complete table below also includes implemented exports. The map matches the [public 3.20 catalogue](https://github.com/DNNDHH/PS5-3.20_Libs/blob/b2a77c09cd71c01f34c790cfbe98c751a13262ad/libcairo.c) and [selected export metadata](https://gist.github.com/kyon-eth/a0bb48f2b3070a5eac8a638810f195f2/a3838ac54ebcc46002a9a2dcce4dbdc) from two version-labelled images (SHA-256 `ec2158e0c5875316d200037d7f4bc48861626451752523f6930d687307c75ef8`). The labels are not authenticated; unsupported functions still throw through `NotImplemented_nid_no_patch`, and their prototypes and behavior remain unverified.
 
 | Name | NID |
 | --- | --- |
@@ -19,7 +29,6 @@
 | `cairo_stroke_extents` | `1K5ly63m6fo` |
 | `cairo_arc_negative` | `2w5H3b3yPqw` |
 | `cairo_new_sub_path` | `36Wm5aIJUFY` |
-| `cairo_image_surface_get_stride` | `3DtP-+fNq0c` |
 | `cairo_user_to_device` | `3grQ1jCgta8` |
 | `cairo_reference` | `3pmBdB-bl8w` |
 | `cairo_set_antialias` | `3urTbaMTNyE` |
@@ -27,15 +36,12 @@
 | `cairo_image_surface_create_from_png_stream` | `4dvdsqyLM8c` |
 | `cairo_get_fill_rule` | `4e7O-m-JWVM` |
 | `cairo_ft_scaled_font_lock_face` | `4gDTaBZH8lo` |
-| `cairo_surface_destroy` | `4svUXLrNYXs` |
 | `cairo_glyph_path` | `54HrgUIQHOk` |
-| `cairo_surface_set_device_scale` | `5CJXb1X+okk` |
 | `cairo_get_dash` | `5OZ1YwHyHd8` |
 | `cairo_set_source_rgb` | `6DvK+OdIPW4` |
 | `cairo_scaled_font_destroy` | `6Y3HHedGzlw` |
 | `cairo_pattern_reference` | `6qRL52tLOII` |
 | `cairo_scaled_font_get_font_options` | `8SOxQrQ7AfQ` |
-| `cairo_surface_get_type` | `8viKdiZL7j4` |
 | `cairo_in_stroke` | `8zMm0QOWZAA` |
 | `cairo_scaled_font_get_ctm` | `A++pFuyxZPg` |
 | `cairo_set_font_size` | `A-0StSi2AwA` |
@@ -44,18 +50,14 @@
 | `cairo_pattern_set_extend` | `Ax867+0HUgA` |
 | `cairo_set_source_rgba` | `BZFvjfb9xDk` |
 | `cairo_ft_font_face_create_for_pattern` | `By6b1vjSVok` |
-| `cairo_image_surface_get_height` | `CKmxM--7U88` |
 | `cairo_mask` | `D1KYCZ80Sac` |
 | `cairo_get_line_width` | `D45IcsszyQI` |
 | `cairo_curve_to` | `DOCnSv1cXx8` |
-| `cairo_surface_reference` | `Dv1FqxQxOkw` |
 | `cairo_copy_path` | `E2E+DDLhCRg` |
-| `cairo_rectangle` | `E5LkpnAY7po` |
 | `cairo_get_matrix` | `EItmXRLen7w` |
 | `cairo_user_to_device_distance` | `F2ZShEhLU8Y` |
 | `cairo_scaled_font_extents` | `FbWFbLUQOys` |
 | `cairo_show_glyphs` | `FnhwGKKZOjU` |
-| `cairo_surface_create_similar` | `Gn3ZBaH2rK0` |
 | `cairo_mesh_pattern_curve_to` | `H9bwCsWw7LA` |
 | `cairo_scaled_font_get_font_matrix` | `HKjYBSCx3mY` |
 | `cairo_mesh_pattern_line_to` | `HTB1uUwgSVQ` |
@@ -65,14 +67,12 @@
 | `cairo_set_miter_limit` | `IKnEk6g6ZV0` |
 | `cairo_translate` | `IdKE2DrNBck` |
 | `cairo_font_face_destroy` | `IgBFcd4cF28` |
-| `cairo_surface_status` | `JBH18i-WCu0` |
 | `cairo_scaled_font_text_extents` | `Jk9paxbMQsk` |
 | `cairo_has_current_point` | `JwQxC4dA5DY` |
 | `cairo_pattern_create_linear` | `K62jNcRGQdY` |
 | `cairo_destroy` | `K6aayzvQMlE` |
 | `cairo_clip_extents` | `LJNqwiDWTm0` |
 | `cairo_set_scaled_font` | `LUh-6rZhniA` |
-| `cairo_image_surface_get_format` | `LrT15KUYBvc` |
 | `cairo_region_create` | `MGMwq9DNMyE` |
 | `cairo_fill` | `Ndvm8s28Gyc` |
 | `cairo_transform` | `OHgp1uE8P2c` |
@@ -83,7 +83,6 @@
 | `cairo_identity_matrix` | `PaSEtyxiC0o` |
 | `cairo_save` | `Pj8asGd55jA` |
 | `cairo_clip` | `PkGZZi1G2Gw` |
-| `cairo_surface_flush` | `Pu24S09J+MQ` |
 | `cairo_pattern_create_for_surface` | `Q6xyruheFCE` |
 | `cairo_arc` | `R0TePTSHd2k` |
 | `cairo_stroke_preserve` | `RzM4ZhlKzPg` |
@@ -95,11 +94,9 @@
 | `cairo_set_fill_rule` | `THcHgZElshs` |
 | `cairo_get_miter_limit` | `TWtGBP-grBM` |
 | `cairo_get_antialias` | `U4Ajvh3L57k` |
-| `cairo_surface_get_device_scale` | `UKeNl8mVbsc` |
 | `cairo_mesh_pattern_begin_patch` | `Ux6XxakVN+8` |
 | `cairo_mesh_pattern_end_patch` | `VBA3H7mYG70` |
 | `cairo_get_target` | `Wr3nsor1aNc` |
-| `cairo_surface_mark_dirty_rectangle` | `X64Wjxgh1L4` |
 | `cairo_append_path` | `XX9tocaUX+g` |
 | `cairo_region_union_rectangle` | `Ya+vgrJjBQE` |
 | `cairo_region_reference` | `Yarxt1LHaf0` |
@@ -111,7 +108,6 @@
 | `cairo_pattern_create_mesh` | `bz5MfOeWZw4` |
 | `cairo_path_destroy` | `cOkxYTuZQyU` |
 | `cairo_stroke` | `cdr2T4SoIyU` |
-| `cairo_set_operator` | `dc4bb-f5YEE` |
 | `cairo_fill_preserve` | `dewyjTlk+u8` |
 | `cairo_fill_extents` | `dkoQNd4kBlQ` |
 | `cairo_ft_font_face_create_for_ft_face` | `dqEhIWRTjuo` |
@@ -125,7 +121,6 @@
 | `cairo_push_group` | `hlh15JjNtWg` |
 | `cairo_font_options_destroy` | `huXPyr6A9to` |
 | `cairo_ft_font_options_substitute` | `ii895dyBjMo` |
-| `cairo_image_surface_get_width` | `inWumYPZgtw` |
 | `cairo_font_options_create` | `j2xKmRzIV84` |
 | `cairo_device_to_user` | `jyf32aEUoMs` |
 | `cairo_font_options_set_antialias` | `kNua19l9-0I` |
@@ -142,22 +137,15 @@
 | `cairo_show_text` | `psdqLsaPnkk` |
 | `cairo_set_font_face` | `qzEwpfbLVxI` |
 | `cairo_close_path` | `rENdf2qgOE4` |
-| `cairo_image_surface_create` | `ry52QkQeAWo` |
-| `cairo_format_stride_for_width` | `s9BsLfgWTeM` |
 | `cairo_create` | `sfmawT-nIUc` |
 | `cairo_get_current_point` | `sinmW4Wm6OQ` |
 | `cairo_move_to` | `smpeN8iWrcc` |
 | `cairo_scale` | `suww6V0qqpU` |
-| `cairo_get_operator` | `tYTJIi4s6t0` |
 | `cairo_scaled_font_create` | `uKNPDudJTmo` |
 | `cairo_pattern_create_radial` | `uYFjM3ReDRQ` |
-| `cairo_surface_get_content` | `ut+atyIgpQw` |
 | `cairo_set_source_surface` | `vcN1gg+gWRg` |
 | `cairo_region_destroy` | `vnHq+jcDKBM` |
-| `cairo_image_surface_get_data` | `wHTcu1PV-MU` |
-| `cairo_surface_create_for_rectangle` | `wJzrbtZ7MOk` |
 | `cairo_device_destroy` | `wO1D4B90k0k` |
-| `cairo_image_surface_create_for_data` | `wlO4ljYI06M` |
 | `cairo_pattern_add_color_stop_rgba` | `xXWrbaaPNNg` |
 | `cairo_region_num_rectangles` | `xoe4ss9GmYc` |
 | `cairo_set_line_width` | `zwMGP3ASKMI` |
