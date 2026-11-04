@@ -1282,17 +1282,6 @@ int DoMapAnon(void** addr, size_t len, int prot, int flags, size_t alignment, bo
     return MapAnonymous(addr, len, prot, flags, alignment, exclusive, false);
 }
 
-int DoMapZero(void** addr, size_t len, int prot, int flags) {
-#ifdef _WIN32
-    ValidateOutput(addr);
-    if (len == 0 || (len & (PS5_PAGE_SIZE - 1)) != 0) return SCE_KERNEL_ERROR_EINVAL;
-    if (LinuxProtFromSce(prot) != PROT_READ) throw std::invalid_argument("Zero pages are only readable: " + std::to_string(prot));
-    return MapAnonymous(addr, len, prot, flags, PS5_PAGE_SIZE, false, true);
-#else
-    return DoMapAnon(addr, len, prot, flags);
-#endif
-}
-
 // Wolverine stack (fork ce3be64b4): read-only fixed pages that read as zeros share one host page
 // (GuestArenaMapZero) instead of taking a private page each; anything else is DoMapAnon.
 int DoMapZero(void** addr, size_t len, int prot, int flags) {

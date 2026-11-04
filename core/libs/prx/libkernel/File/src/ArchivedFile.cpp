@@ -35,7 +35,6 @@ void FillNode(const AppArchiveNode& node, FileStat* sb) {
     sb->st_nlink = node.Directory ? 2 : 1;
     sb->st_size = static_cast<std::int64_t>(node.Size);
     sb->st_blocks = static_cast<std::int64_t>((node.Size + 511) / 512);
-    if (node.Directory) sb->st_blksize = 0x10000;
 }
 
 }
@@ -54,6 +53,12 @@ std::optional<int> OpenArchivedFile(const std::filesystem::path& native, int fla
     if (fd < 0) return -errno;
     AppArchiveAttach_nid_no_patch(fd, node);
     return fd;
+}
+
+void RefuseMergedDirectory(const std::filesystem::path& native) {
+    if (!AppArchiveHasDirectory_nid_no_patch(native)) return;
+    std::error_code error;
+    if (std::filesystem::is_directory(native, error)) NotImplemented_nid_no_patch(("opening " + native.string() + " merged with app0.zar").c_str());
 }
 
 bool IsArchivedFile(int fd) {
@@ -111,6 +116,10 @@ void ShareArchivedFile(int from, int to) {
 
 void ForgetArchivedFile(int fd) {
     AppArchiveDetach_nid_no_patch(fd);
+}
+
+void ForgetClosedDescriptor(int descriptor) {
+    // No-op: descriptor tracking is handled by EqueueDescriptorClosed above.
 }
 
 }
