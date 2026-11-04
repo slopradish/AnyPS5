@@ -1504,15 +1504,6 @@ private:
         out.codes = records.contents.codes;
         out.words = records.contents.words;
         out.readRanges = records.contents.readRanges;
-        for (std::uint32_t resource = 0; resource < plan.info.images.size(); ++resource) {
-            const auto& image = plan.info.images[resource];
-            if (image.table != table || !registeredSampledArrayCandidate(image) || runtime.normalizeImageView == nullptr) continue;
-            auto effectiveWords = records.contents.words.Copy();
-            std::vector<RegisteredImageView> identities;
-            identities.reserve(effectiveWords.size());
-            for (std::uint32_t record = 0; record < effectiveWords.size(); ++record) normalizeRegisteredImageView(image, runtime, plan.maxImageArrayLayers, resource, record, effectiveWords[record], identities);
-            out.resourceViews.push_back({resource, SharedValues<DescriptorValue>(std::move(effectiveWords)), std::move(identities)});
-        }
         auto& counters = tableCounters();
         if (records.fault != 0u) counters.poison[records.fault & ~ImageTableAbi::PoisonFlag].fetch_add(1, std::memory_order_relaxed);
         if (records.contents.unmapped != 0u) counters.poison[static_cast<std::size_t>(PoisonReason::Unmapped)].fetch_add(records.contents.unmapped, std::memory_order_relaxed);
