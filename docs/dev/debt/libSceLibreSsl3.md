@@ -25,11 +25,11 @@
 - [sk_new, sk_push and sk_free](../../../core/libs/prx/libSceLibreSsl3/src/Stack.cpp) (libSceLibreSsl3) - follow [LibreSSL 4.0.0](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/stack/stack.c) `stack.c` with libSceLibreSsl's 32-byte `_STACK` layout, which `stack_local.h` keeps there. Stacks and element arrays come from the guest heap, so the forwarded `sk_pop_free` can release them. Nothing is checked on the console. Where LibreSSL faults or overflows, they throw: `sk_push` on a null stack, on a negative element count, on a null element array it does not regrow, or when the element array cannot double without overflowing `int`
 
 - [ASN1_TIME_diff](../../../core/libs/prx/libSceLibreSsl3/src/Time.cpp) has no console ABI or behavior verification. Its signature and date rules follow LibreSSL 4.0.0 [a_time.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time.c), [a_time_tm.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time_tm.c) and [a_time_posix.c](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/asn1/a_time_posix.c), using the existing 24-byte string layout. Null inputs use the host wall clock; the console clock relationship is unverified. Null output pointers throw after valid input parsing, where the reference dereferences them. Closes when: measured on a PS5.
-- [X509V3_set_ctx](../../../core/libs/prx/libSceLibreSsl3/src/X509V3Context.cpp) (libSceLibreSsl3) - nothing is checked on the console. As in [LibreSSL 4.0.0](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/x509/x509_conf.c#L430-L440) `x509_conf.c`, it stores the issuer, subject, request, CRL and flags in the caller's context and leaves `db` unchanged. The context is the 48-byte `X509V3_CTX` of the public 4.0.0 [x509v3.h](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/x509/x509v3.h#L123-L131), which titles build against; 2.5.4 had an extra `db_meth` before `db`. A null context, which LibreSSL dereferences, throws. Closes when: compared with the console.
+- [ERR_lib_error_string, ERR_func_error_string and ERR_reason_error_string](../../../core/libs/prx/libSceLibreSsl3/src/ErrorStrings.cpp) (libSceLibreSsl3) - nothing is checked on the console. They return null for every code. The [firmware 13.42 module run on a PC](https://github.com/boykopovar/AnyPS5/pull/9535#issuecomment-6407060914) returned null from all three for all 917 LibreSSL table codes after its loaders ran, its string loader init routines are a single `ret`, its image holds none of the library names, and the module exports no `ERR_load_strings` that could add strings. Closes when: compared with the console.
 
 ### Additional callable export inventory
 
-- [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 174 callable exports: 164 named and 10 known only by NID. Every entry throws. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. No functional implementation or title unblock is claimed.
+- [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 172 callable exports: 162 named and 10 known only by NID. Every entry throws. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. No functional implementation or title unblock is claimed.
 
 | Name | NID |
 | --- | --- |
@@ -81,7 +81,6 @@
 | `SSL_set_quic_use_legacy_codepoint` | `CFRaBB2+R+s` |
 | `SSL_CTX_set_default_verify_paths` | `DZ6fywqpaik` |
 | `TLS_server_method` | `EtM5Jwx4EFo` |
-| `ERR_lib_error_string` | `F7jknWesBTY` |
 | `tls_close` | `Fqc0-3YCXjo` |
 | `tls_client` | `GEK3LmjM9Q4` |
 | `BIO_meth_set_ctrl` | `GFEaREp1UFw` |
@@ -127,7 +126,6 @@
 | `EVP_PKEY2PKCS8` | `UT6E1YgI8mw` |
 | `ASN1_TIME_new` | `UmAPG5bxYYk` |
 | `X509_STORE_load_locations` | `V3JtebYui1A` |
-| `ERR_func_error_string` | `VXuysR7ySzw` |
 | `EVP_get_digestbyname` | `Wm24hhTLqWM` |
 | `SSL_SESSION_set_time` | `XG3hIzt9VXY` |
 | `X509_set_issuer_name` | `XK3FmaTS6pg` |
@@ -161,6 +159,7 @@
 | `BN_div` | `iHetf873n+4` |
 | `X509_CRL_get_ext_d2i` | `je-ydGAbgFg` |
 | `X509_digest` | `k1AHUWet-oU` |
+| `X509V3_set_ctx` | `kO-jQ3HS9kE` |
 | `BIO_meth_set_destroy` | `kPCJUQuguzE` |
 | `BIO_set_flags` | `lLHlEb1nt5U` |
 | `tls_config_set_ciphers` | `lTdt9OsPAV0` |
@@ -177,7 +176,6 @@
 | `unknown` | `pdxCm9+CCc4` |
 | `unknown` | `qGsc6uT6p1E` |
 | `EVP_PKEY_verify_init` | `qseLIVbdvMQ` |
-| `ERR_reason_error_string` | `rJZ-aiNIYCA` |
 | `X509_add1_ext_i2d` | `s8WMaKNjwvE` |
 | `EC_GROUP_cmp` | `sENJFZ7WbLU` |
 | `EVP_PKEY_bits` | `ssruelYxprY` |
