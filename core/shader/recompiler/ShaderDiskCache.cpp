@@ -1167,6 +1167,7 @@ bool encodePlan(Writer& writer, const IrResourcePlan& plan) {
         out.Value(column.maxKey);
         out.Value(column.sampler);
         out.Value(column.address);
+        out.Value(column.buffer);
         out.List(column.keyDomains, [](Writer& domains, const KeyDomain& domain) {
             domains.Value(domain.source);
             domains.Value(domain.offset);
@@ -1319,7 +1320,7 @@ bool decodePlan(Reader& reader, IrResourcePlan& plan) {
         value.SetDetachedOperands(std::move(arguments), std::move(phiBlocks));
     }
     reader.List(plan.memoryInfo, 79, decodeMemoryInfo);
-    reader.List(plan.descriptorSources, 80, [&](Reader& in, DescriptorSource& source) {
+    reader.List(plan.descriptorSources, 81, [&](Reader& in, DescriptorSource& source) {
         for (auto& dword : source.dwords) dword = valueAt(in.Get<std::uint32_t>());
         in.Value(source.dwordCount);
         const bool table = in.Get<bool>();
@@ -1332,6 +1333,7 @@ bool decodePlan(Reader& reader, IrResourcePlan& plan) {
         in.Value(column.maxKey);
         in.Value(column.sampler);
         in.Value(column.address);
+        in.Value(column.buffer);
         in.List(column.keyDomains, 13, [](Reader& domains, KeyDomain& domain) {
             domains.Value(domain.source);
             domains.Value(domain.offset);
@@ -1387,6 +1389,14 @@ bool decodePlan(Reader& reader, IrResourcePlan& plan) {
     if (!std::ranges::all_of(plan.descriptorSources, [&](const DescriptorSource& source) { return std::ranges::all_of(source.requiredBlocks, [&](std::uint32_t block) { return block < plan.controlFlow.size(); }); })) return false;
     if (!std::ranges::all_of(plan.materializationSources, knownSource)) return false;
     if (!std::ranges::all_of(plan.descriptorSources, [&](const DescriptorSource& source) { return source.dwordCount <= source.dwords.size() && (!source.tableColumn.has_value() || (knownSource(source.tableColumn->heapSource) && (!source.tableColumn->selected || knownSource(source.tableColumn->selection)) && std::ranges::all_of(source.tableColumn->keyDomains, [&](const KeyDomain& domain) { return knownSource(domain.source); }))); })) return false;
+    for (const auto& source : plan.descriptorSources) {
+        if (!source.tableColumn.has_value()) continue;
+        const auto& column = *source.tableColumn;
+        if (column.buffer && (column.sampler || column.dwordCount != 4u)) return false;
+        const auto& parent = plan.descriptorSources[column.heapSource].tableColumn;
+        if (parent.has_value() && (column.buffer || column.address || column.indirect || !parent->buffer || !parent->indirect || plan.descriptorSources[parent->heapSource].tableColumn.has_value())) return false;
+        if (column.pointerKeyed && (!column.indirect || column.buffer || parent.has_value())) return false;
+    }
     if (!std::ranges::all_of(plan.info.buffers, [&](const BufferResource& buffer) { return knownSource(buffer.source); })) return false;
     if (!std::ranges::all_of(plan.info.images, [&](const ImageResource& image) { return knownSource(image.source); })) return false;
     if (!std::ranges::all_of(plan.info.samplers, [&](const SamplerResource& sampler) { return knownSource(sampler.source); })) return false;

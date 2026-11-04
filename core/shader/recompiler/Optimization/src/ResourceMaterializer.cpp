@@ -508,8 +508,10 @@ struct ColumnRecords {
     bool narrowed = false;
     bool outside = false;
     bool sealed = false;
+    bool nested = false;
     std::vector<RecordState> states;
     std::vector<std::uint32_t> words;
+    std::vector<std::uint64_t> pointers;
     std::vector<DescriptorValue> distinct;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> readRanges;
     ColumnContents contents;
@@ -731,6 +733,7 @@ struct ElementIndexTag {};
 struct SamplerIndexTag {};
 struct PoisonIndexTag {};
 struct TableRecordsTag {};
+struct NestedRecordsTag {};
 
 class TableSnapshotter {
 public:
@@ -768,6 +771,8 @@ public:
         const bool checkEpoch = (count > 1u || hasIndirect) && runtime.descriptorScope != nullptr;
         bool completed = false;
         for (std::uint32_t attempt = 0; attempt < 3u; ++attempt) {
+            parentKeysRemaining = ImageTableAbi::MaxParentKeys;
+            nestedKeysRemaining = ImageTableAbi::MaxNestedKeys;
             if (attempt != 0u) {
                 columns.clear();
                 pages.clear();
@@ -1077,6 +1082,12 @@ private:
             records.fault = ImageTableAbi::PoisonCode(static_cast<std::uint32_t>(PoisonReason::Inactive));
             return;
         }
+        if (plan.descriptorSources.at(column.heapSource).tableColumn.has_value()) {
+            const auto& parent = *plan.descriptorSources.at(column.heapSource).tableColumn;
+            if (column.buffer || !parent.buffer || plan.descriptorSources.at(parent.heapSource).tableColumn.has_value()) throw std::runtime_error("image table has an unsupported nested descriptor");
+            NestedColumn(column, records);
+            return;
+        }
         if (column.address) {
             DescriptorValue pointer;
             walker.EvaluateDescriptorSource(plan, column.heapSource, runtime, pointer);
@@ -1095,10 +1106,22 @@ private:
                 return;
             }
             records.records = ImageTableAbi::ScalarBufferRecords(column.addend, column.stride, column.offset + (column.indirect ? 4u : 0u), records.size);
-            if (records.size != 0u) tables.ranges.emplace_back(records.base, records.size);
+            if (records.size != 0u) {
+                tables.ranges.emplace_back(records.base, records.size);
+                if (column.buffer) records.readRanges.emplace_back(records.base, records.size);
+            }
         }
+        ReadRecords(column, records, column.buffer ? parentKeysRemaining : ImageTableAbi::MaxKeys);
+        if (column.buffer) parentKeysRemaining -= records.keys;
+    }
+
+    void ReadRecords(const TableColumn& column, ColumnRecords& records, std::uint32_t limit) {
+        stamp = {};
+        comparedRuns.clear();
+        comparedWords.clear();
+        wordsIndex.Clear();
         records.records = std::min(records.records, ImageTableAbi::KeyRecords(column.maxKey, column.stride));
-        records.keys = std::min(records.records, ImageTableAbi::MaxKeys);
+        records.keys = std::min(records.records, limit);
         records.outside = records.keys < records.records;
         if (!column.keyDomains.empty() && records.keys != 0u) {
             Narrow(column, records);
@@ -1110,6 +1133,7 @@ private:
         const auto end = records.base + records.size;
         if (column.indirect) {
             unread();
+            if (column.buffer || column.pointerKeyed) records.pointers.assign(records.keys, ImageTableAbi::UncapturedPointer);
             for (std::uint32_t record = 0; record < records.keys; record++) {
                 if (records.states[record] != RecordState::Read) continue;
                 const auto offset = column.addend + record * column.stride;
@@ -1120,6 +1144,7 @@ private:
                     continue;
                 }
                 std::uint64_t pointer = (static_cast<std::uint64_t>(Read(records.base + *highWord)) << 32u) | Read(records.base + *lowWord);
+                if (column.pointerKeyed) records.pointers[record] = pointer;
                 for (const auto& hop : column.pointerHops) {
                     const auto low = ImageTableAbi::ScalarAddressDword(pointer, hop.offset, hop.immediate);
                     const auto high = ImageTableAbi::ScalarAddressDword(pointer, hop.offset, hop.immediate + 4u);
@@ -1131,8 +1156,9 @@ private:
                     tables.ranges.emplace_back(*low, 2u * sizeof(std::uint32_t));
                 }
                 if (records.states[record] != RecordState::Read) continue;
+                if (column.buffer) records.pointers[record] = pointer;
                 DescriptorValue value;
-                value.dwordCount = column.sampler ? 4u : 8u;
+                value.dwordCount = column.sampler || column.buffer ? 4u : 8u;
                 std::uint64_t first = std::numeric_limits<std::uint64_t>::max();
                 std::uint64_t past = 0;
                 for (std::uint32_t dword = 0; dword < column.dwordCount; dword++) {
@@ -1150,6 +1176,7 @@ private:
                 if (records.states[record] != RecordState::Read) continue;
                 records.words[record] = WordsIndex(records, value);
                 tables.ranges.emplace_back(first, past - first);
+                if (column.buffer) records.readRanges.emplace_back(first, past - first);
             }
             return;
         }
@@ -1270,6 +1297,60 @@ private:
         records.readRanges.resize(ranges);
         Seal(records);
         if (memoized) Remember(key, records, std::move(runs), std::move(read), column.address && low < high ? low : 0u, column.address && low < high ? high : 0u);
+    }
+
+    void NestedColumn(const TableColumn& column, ColumnRecords& records) {
+        const auto& parent = Column(column.heapSource);
+        records = parent;
+        records.readRanges = parent.contents.readRanges.Copy();
+        records.contents = {};
+        records.sealed = false;
+        records.nested = true;
+        std::map<std::array<std::uint32_t, 8>, std::uint32_t> children;
+        for (std::uint32_t key = 0; key < records.keys; ++key) {
+            if (records.states[key] != RecordState::Read) continue;
+            const auto value = parent.contents.words.at(records.words[key]);
+            if (value.dwordCount != 4u || value.availableDwordMask != 0x0fu) {
+                records.states[key] = RecordState::Unmapped;
+                continue;
+            }
+            if (const auto found = children.find(value.dwords); found != children.end()) {
+                records.words[key] = found->second;
+                continue;
+            }
+            ColumnRecords child;
+            const auto heap = decodeBufferDescriptor(value);
+            if (heap.Type() != 0u) {
+                child.fault = ImageTableAbi::PoisonCode(static_cast<std::uint32_t>(PoisonReason::NotBuffer));
+            } else {
+                child.base = heap.Base48();
+                child.size = heap.GetSize();
+                child.records = ImageTableAbi::ScalarBufferRecords(column.addend, column.stride, column.offset, child.size);
+                if (child.size != 0u) {
+                    tables.ranges.emplace_back(child.base, child.size);
+                    records.readRanges.emplace_back(child.base, child.size);
+                }
+                ReadRecords(column, child, nestedKeysRemaining);
+                nestedKeysRemaining -= child.keys;
+            }
+            const auto index = static_cast<std::uint32_t>(tables.nested.size());
+            if (!child.sealed) Seal(child);
+            ImageTableColumnSnapshot childOut;
+            childOut.base = child.base;
+            childOut.size = child.size;
+            childOut.records = child.records;
+            childOut.keys = child.keys;
+            childOut.fault = child.fault;
+            childOut.outside = child.outside;
+            childOut.nested = child.nested;
+            if (!child.pointers.empty()) childOut.pointers = SharedValues<std::uint64_t>(child.pointers);
+            childOut.codes = child.contents.codes;
+            childOut.words = child.contents.words;
+            childOut.readRanges = child.contents.readRanges;
+            tables.nested.push_back(std::move(childOut));
+            children.emplace(value.dwords, index);
+            records.words[key] = index;
+        }
     }
 
     void ReadRuns(const std::vector<std::pair<std::uint64_t, std::uint32_t>>& runs, std::vector<std::uint32_t>& read, std::uint32_t descriptorDwords) const {
@@ -1413,6 +1494,9 @@ private:
         out.keys = records.keys;
         out.fault = records.fault;
         out.outside = records.outside;
+        out.nested = records.nested;
+        out.pointerKeyed = column.pointerKeyed;
+        if (!records.pointers.empty()) out.pointers = SharedValues<std::uint64_t>(records.pointers);
         out.codes = records.contents.codes;
         out.words = records.contents.words;
         out.readRanges = records.contents.readRanges;
@@ -1446,6 +1530,8 @@ private:
     std::vector<std::pair<std::uint64_t, std::uint32_t>> comparedRuns;
     std::vector<std::uint32_t> comparedWords;
     std::vector<std::uint32_t> keyWords;
+    std::uint32_t parentKeysRemaining = ImageTableAbi::MaxParentKeys;
+    std::uint32_t nestedKeysRemaining = ImageTableAbi::MaxNestedKeys;
 };
 
 void materializeSnapshot(const IrResourcePlan& plan, const SrtRuntime& runtime, SrtWalker& walker, ResourceSnapshot& snapshot, std::vector<std::uint8_t>& activeSources) {
@@ -1814,6 +1900,7 @@ bool TableResolutionReuse() {
 struct ResolutionMemoEntry {
     std::uint64_t memoKey = 0;
     std::vector<ImageTableColumnSnapshot> tables;
+    std::vector<ImageTableColumnSnapshot> nested;
     std::vector<bool> reducing;
     std::shared_ptr<const ResolvedImageTables> resolved;
     std::size_t footprint = 0;
@@ -1838,7 +1925,7 @@ bool sameColumns(const std::vector<ImageTableColumnSnapshot>& left, const std::v
     for (std::size_t index = 0; index < left.size(); index++) {
         const auto& a = left[index];
         const auto& b = right[index];
-        if (a.base != b.base || a.size != b.size || a.records != b.records || a.keys != b.keys || a.fault != b.fault || a.outside != b.outside || !a.codes.Shares(b.codes) || !a.words.Shares(b.words) || a.resourceViews != b.resourceViews) return false;
+        if (a.base != b.base || a.size != b.size || a.records != b.records || a.keys != b.keys || a.fault != b.fault || a.outside != b.outside || a.nested != b.nested || a.pointerKeyed != b.pointerKeyed || !a.pointers.Shares(b.pointers) || !a.codes.Shares(b.codes) || !a.words.Shares(b.words) || a.resourceViews != b.resourceViews) return false;
     }
     return true;
 }
@@ -1846,7 +1933,7 @@ bool sameColumns(const std::vector<ImageTableColumnSnapshot>& left, const std::v
 std::size_t resolutionFootprint(const ResolvedImageTables& resolved, const std::vector<ImageTableColumnSnapshot>& tables) {
     std::size_t footprint = resolved.map.size() + (resolved.elements.size() * sizeof(ImageTableElement) + resolved.samplers.size() * sizeof(ImageTableSamplerElement) + resolved.poison.size() * sizeof(ImageTablePoisonRecord)) / sizeof(std::uint32_t);
     for (const auto& table : tables) {
-        footprint += 16u + table.codes.size() + table.words.size() * 9u;
+        footprint += 16u + table.codes.size() + table.words.size() * 9u + table.pointers.size() * 2u;
         for (const auto& view : table.resourceViews) footprint += view.words.size() * 9u + view.identities.size() * (sizeof(RegisteredImageView) / sizeof(std::uint32_t));
     }
     return footprint;
@@ -1985,10 +2072,10 @@ ResolvedImageTables ResourceMaterializer::ResolveImageTables(const ShaderInfo& i
     std::vector<bool> outside(count, false);
     std::size_t recordCodes = 0;
     for (const auto& column : tables.tables) recordCodes = std::max(recordCodes, column.words.size());
+    for (const auto& column : tables.nested) recordCodes = std::max(recordCodes, column.words.size());
     DenseScratchMap records(threadScratch<DenseSlot, TableRecordsTag>(), recordCodes);
-    const auto fill = [&](std::uint32_t resource, std::uint32_t table, bool sampler) {
-        const auto& column = tables.tables.at(table);
-        const auto header = Abi::TableHeader(table);
+    DenseScratchMap nestedRecords(threadScratch<DenseSlot, NestedRecordsTag>(), tables.nested.size());
+    const auto fill = [&](auto&& self, std::uint32_t resource, std::uint32_t table, bool sampler, const ImageTableColumnSnapshot& column, std::uint32_t header) -> void {
         out.map[header + Abi::TableKeyCount] = column.keys;
         out.map[header + Abi::TableSizeLow] = static_cast<std::uint32_t>(column.size);
         out.map[header + Abi::TableSizeHigh] = static_cast<std::uint32_t>(column.size >> 32u);
@@ -2000,17 +2087,36 @@ ResolvedImageTables ResourceMaterializer::ResolveImageTables(const ShaderInfo& i
         } else if (!sampler && (info.images[resource].tableOperation == TableOperation::Unsupported || info.runtimeImageModes[resource].empty())) {
             out.map[header + Abi::TableFault] = poison(resource, PoisonReason::UnsupportedOperation, nullptr);
         }
-        outside[table] = column.outside;
+        outside[table] = outside[table] || column.outside;
+        const bool byPointer = column.nested || column.pointerKeyed;
         const auto mapStart = static_cast<std::uint32_t>(out.map.size());
-        out.map[header + Abi::TableMapStart] = mapStart;
-        out.map.resize(out.map.size() + column.keys, 0u);
-        records.Clear();
+        if (!byPointer) {
+            out.map[header + Abi::TableMapStart] = mapStart;
+            out.map.resize(out.map.size() + column.keys, 0u);
+        } else if (column.pointers.size() != column.keys) {
+            throw std::runtime_error("pointer-keyed image table snapshot has no pointer for each record");
+        }
+        std::map<std::uint64_t, std::uint32_t> pointers;
+        if (column.nested) nestedRecords.Clear();
+        else records.Clear();
         for (std::uint32_t key = 0; key < column.keys; key++) {
             const auto code = column.codes[key];
+            if (byPointer && column.pointers[key] == Abi::UncapturedPointer) continue;
             std::uint32_t mapped = Abi::NullCode;
             if ((code & Abi::PoisonFlag) != 0u) {
                 const auto reason = static_cast<PoisonReason>(code & ~Abi::PoisonFlag);
                 mapped = reason == PoisonReason::OutsideDomain ? Abi::PoisonCode(Abi::OutsideDomainPoison) : poison(resource, reason, nullptr);
+            } else if (column.nested && out.map[header + Abi::TableFault] == 0u) {
+                if (const auto known = nestedRecords.Find(code)) {
+                    mapped = *known;
+                } else {
+                    const auto& child = tables.nested.at(code);
+                    if (child.nested) throw std::runtime_error("image table snapshot has unsupported recursive children");
+                    mapped = static_cast<std::uint32_t>(out.map.size());
+                    out.map.resize(out.map.size() + Abi::TableWords, 0u);
+                    nestedRecords.Set(code, mapped);
+                    self(self, resource, table, sampler, child, mapped);
+                }
             } else if (out.map[header + Abi::TableFault] == 0u) {
                 if (const auto known = records.Find(code)) {
                     mapped = *known;
@@ -2022,19 +2128,34 @@ ResolvedImageTables ResourceMaterializer::ResolveImageTables(const ShaderInfo& i
                     records.Set(code, mapped);
                 }
             }
-            out.map[mapStart + key] = mapped;
+            if (byPointer) {
+                const auto [found, inserted] = pointers.try_emplace(column.pointers[key], mapped);
+                if (!inserted && found->second != mapped) throw std::runtime_error("pointer-keyed image table captured conflicting values at one pointer");
+            } else {
+                out.map[mapStart + key] = mapped;
+            }
         }
-        if (sampler && out.map[header + Abi::TableFault] == 0u) {
+        if (byPointer) {
+            if (pointers.size() > Abi::MaxParentKeys) throw std::runtime_error("pointer-keyed image table has too many pointers");
+            out.map[header + Abi::TableKeyCount] = static_cast<std::uint32_t>(pointers.size());
+            out.map[header + Abi::TableMapStart] = static_cast<std::uint32_t>(out.map.size());
+            for (const auto& [pointer, code] : pointers) {
+                out.map.push_back(static_cast<std::uint32_t>(pointer));
+                out.map.push_back(static_cast<std::uint32_t>(pointer >> 32u));
+                out.map.push_back(code);
+            }
+            out.map[header + Abi::TableOutsideCode] = poison(resource, PoisonReason::Unmapped, nullptr);
+        } else if (sampler && out.map[header + Abi::TableFault] == 0u) {
             DescriptorValue zero;
             zero.dwordCount = 4u;
             out.map[header + Abi::TableOutsideCode] = samplerRecord(resource, zero);
         }
     };
     for (std::uint32_t resource = 0; resource < info.images.size(); resource++) {
-        if (info.images[resource].table != NoTable) fill(resource, info.images[resource].table, false);
+        if (info.images[resource].table != NoTable) fill(fill, resource, info.images[resource].table, false, tables.tables.at(info.images[resource].table), Abi::TableHeader(info.images[resource].table));
     }
     for (std::uint32_t resource = 0; resource < info.samplers.size(); resource++) {
-        if (info.samplers[resource].table != NoTable) fill(resource, info.samplers[resource].table, true);
+        if (info.samplers[resource].table != NoTable) fill(fill, resource, info.samplers[resource].table, true, tables.tables.at(info.samplers[resource].table), Abi::TableHeader(info.samplers[resource].table));
     }
     out.map[Abi::HeaderElementCount] = static_cast<std::uint32_t>(out.elements.size());
     out.map[Abi::HeaderSamplerCount] = static_cast<std::uint32_t>(out.samplers.size());
@@ -2054,13 +2175,13 @@ std::shared_ptr<const ResolvedImageTables> ResourceMaterializer::ResolveImageTab
         static_cast<void>(ResolveImageTables(info, snapshot, memoKey));
         return none;
     }
-    if (memoKey == 0u || !TableResolutionReuse()) return std::make_shared<const ResolvedImageTables>(ResolveImageTables(info, snapshot, memoKey));
+    if (memoKey == 0u || snapshot.tables.tables.empty() || !TableResolutionReuse()) return std::make_shared<const ResolvedImageTables>(ResolveImageTables(info, snapshot, memoKey));
     auto reducing = reducingSamplers(info, snapshot);
     auto& memo = resolutionMemo();
     auto& totals = tableReuseTotals();
     {
         std::lock_guard lock(memo.mutex);
-        const auto found = std::find_if(memo.entries.begin(), memo.entries.end(), [&](const ResolutionMemoEntry& entry) { return entry.memoKey == memoKey && entry.reducing == reducing && sameColumns(entry.tables, snapshot.tables.tables); });
+        const auto found = std::find_if(memo.entries.begin(), memo.entries.end(), [&](const ResolutionMemoEntry& entry) { return entry.memoKey == memoKey && entry.reducing == reducing && sameColumns(entry.tables, snapshot.tables.tables) && sameColumns(entry.nested, snapshot.tables.nested); });
         if (found != memo.entries.end()) {
             std::rotate(memo.entries.begin(), found, found + 1);
             totals.resolutionsShared.fetch_add(1, std::memory_order_relaxed);
@@ -2069,10 +2190,10 @@ std::shared_ptr<const ResolvedImageTables> ResourceMaterializer::ResolveImageTab
     }
     auto resolved = std::make_shared<const ResolvedImageTables>(ResolveImageTables(info, snapshot, memoKey));
     totals.resolutions.fetch_add(1, std::memory_order_relaxed);
-    const auto footprint = resolutionFootprint(*resolved, snapshot.tables.tables);
+    const auto footprint = resolutionFootprint(*resolved, snapshot.tables.tables) + resolutionFootprint(*resolved, snapshot.tables.nested);
     if (footprint > ResolutionMemoWords) return resolved;
     std::lock_guard lock(memo.mutex);
-    memo.entries.insert(memo.entries.begin(), ResolutionMemoEntry{memoKey, snapshot.tables.tables, std::move(reducing), resolved, footprint});
+    memo.entries.insert(memo.entries.begin(), ResolutionMemoEntry{memoKey, snapshot.tables.tables, snapshot.tables.nested, std::move(reducing), resolved, footprint});
     std::size_t kept = 0;
     std::size_t variantEntries = 0;
     std::size_t total = 0;
