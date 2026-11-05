@@ -78,7 +78,8 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
             ++immediateLabels;
             if (endOfPipeInterrupt) {
                 const auto queueId = submission.queue;
-                interruptDeferred = localDevice->AfterRecordedWork([this, queueId] { deliverGuestEopInterrupt(queueId); }, submission.queue == 0);
+                const auto context = *interrupt;
+                interruptDeferred = localDevice->AfterRecordedWork([this, queueId, context] { deliverGuestEopInterrupt(queueId, context); }, submission.queue == 0);
                 if (interruptDeferred && workOpen) localDevice->SubmitRecorded(submission.queue == 0);
             }
             return false;
