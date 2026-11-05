@@ -145,6 +145,9 @@ std::vector<ProgramHeader> ElfReader::ReadProgramHeaders() const {
         ph.MemorySize = _readU64At(offset + 0x28);
         ph.Alignment = _readU64At(offset + kPhdrAlignOffset);
 
+        if (ph.Type == PT_LOAD && ph.Alignment > 1 && !std::has_single_bit(ph.Alignment)) {
+            throw RelinkerException("Invalid load segment alignment", offset + kPhdrAlignOffset);
+        }
         if (ph.Type != PT_LOAD && ph.Type != PT_TLS && ph.Alignment > 1 && !std::has_single_bit(ph.Alignment)) {
             throw RelinkerException("Program header alignment is not a power of two", offset + kPhdrAlignOffset);
         }
@@ -170,11 +173,11 @@ std::vector<ProgramHeader> ElfReader::ReadProgramHeaders() const {
                 throw RelinkerException("PT_SCE_RELRO partially overlaps a PT_LOAD segment", relro.MappedAddress);
             covered = true;
         }
+        if (relro.FileSize > relro.MemorySize)
+            throw RelinkerException("PT_SCE_RELRO file size exceeds memory size", relro.Offset);
+        if (!_rangeFits(relro.Offset, relro.FileSize, _fileBuffer.size()))
+            throw RelinkerException("Segment offset out of bounds", relro.Offset);
         if (!covered) {
-            if (relro.FileSize > relro.MemorySize)
-                throw RelinkerException("PT_SCE_RELRO file size exceeds memory size", relro.Offset);
-            if (!_rangeFits(relro.Offset, relro.FileSize, _fileBuffer.size()))
-                throw RelinkerException("Segment offset out of bounds", relro.Offset);
             auto protection = relro;
             protection.Type = PT_GNU_RELRO;
             protection.Flags = PF_R;
