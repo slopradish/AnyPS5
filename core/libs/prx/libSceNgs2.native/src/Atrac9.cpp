@@ -660,7 +660,7 @@ int APS5_VABI sceNgs2CalcWaveformBlock(const Ngs2WaveformFormat* format, uint32_
         const auto type = format->waveform_type;
         if (IsPcmType(type)) {
             calculated = PcmBlock(type, format->num_channels, sample_pos, num_samples);
-        } else if (type == WAVEFORM_TYPE_VAG) {
+        } else if (type == SCE_NGS2_WAVEFORM_TYPE_VAG) {
             calculated = VagBlock(format->num_channels, sample_pos, num_samples);
         } else if (type != SCE_NGS2_WAVEFORM_TYPE_ATRAC9) {
             result = SCE_NGS2_ERROR_UNKNOWN_WAVEFORM_FORMAT;
