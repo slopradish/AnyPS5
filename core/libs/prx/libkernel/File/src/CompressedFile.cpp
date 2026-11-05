@@ -1,4 +1,5 @@
 #include "prx/libkernel/File/include/CompressedFile.hpp"
+#include "prx/libc/include/HostThreadLocal.hpp"
 
 #include <libdeflate.h>
 
@@ -54,9 +55,10 @@ struct ThreadState {
     std::vector<std::uint8_t> stored;
 };
 
+struct ThreadStateTag {};
+
 ThreadState& State() {
-    thread_local ThreadState state;
-    return state;
+    return HostThreadLocal<ThreadState, ThreadStateTag>();
 }
 
 [[noreturn]] void Corrupt(const char* why, std::uint64_t chunk) {
