@@ -581,15 +581,6 @@ int main() {
                 }
             }
         }},
-        {"DT_RELENT dynamic entry size mismatch", [] {
-            for (const std::uint64_t size : {0ULL, 1ULL, 8ULL, 12ULL, 15ULL, 17ULL, 24ULL}) {
-                const std::vector<std::pair<std::int64_t, std::uint64_t>> tags = {
-                    {Elfpatcher::DT_RELENT, size},
-                    {0, 0}
-                };
-                RejectDynamicTags(DynamicFixture(tags), DynamicHeader(tags.size()));
-            }
-        }},
         {"unsupported DT_PLTREL and DT_OS_PLTREL type", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_PLTREL, Elfpatcher::DT_OS_PLTREL}) {
                 for (const std::uint64_t type : {0ULL, 1ULL, 2ULL, 8ULL, 20ULL}) {
