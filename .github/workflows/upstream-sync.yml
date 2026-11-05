@@ -1,0 +1,356 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Integration branch to merge upstream main into
+        required: true
+        default: wolverine-bringup
+        type: string
+      build:
+        description: Build to run after a clean merge
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - hosted
+          - self-hosted
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_URL: https://github.com/boykopovar/AnyPS5.git
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  merge-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+      clean: ${{ steps.merge.outputs.clean }}
+      behind: ${{ steps.merge.outputs.behind }}
+      upstream_sha: ${{ steps.upstream.outputs.sha }}
+      sync_sha: ${{ steps.merge.outputs.sync_sha }}
+      attention: ${{ steps.port.outputs.attention }}
+      conflicts: ${{ steps.merge.outputs.conflicts }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch || 'wolverine-bringup' }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: upstream
+        name: Fetch upstream main
+        run: |
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          echo "sha=$(git rev-parse "upstream/$UPSTREAM_BRANCH")" >> "$GITHUB_OUTPUT"
+
+      - id: merge
+        name: Merge upstream main into a sync branch
+        run: |
+          set -euo pipefail
+          git config user.name "upstream-sync"
+          git config user.email "upstream-sync@users.noreply.github.com"
+          upstream="upstream/$UPSTREAM_BRANCH"
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "behind=0" >> "$GITHUB_OUTPUT"
+            echo "sync_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git fetch --no-tags origin "$SYNC_BRANCH" 2>/dev/null; then
+            if git merge-base --is-ancestor "$upstream" FETCH_HEAD && git merge-base --is-ancestor HEAD FETCH_HEAD; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "clean=true" >> "$GITHUB_OUTPUT"
+              echo "behind=$(git rev-list --count "HEAD..$upstream")" >> "$GITHUB_OUTPUT"
+              echo "sync_sha=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          behind=$(git rev-list --count "HEAD..$upstream")
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          git checkout -B "$SYNC_BRANCH" HEAD
+          if git merge --no-ff --no-edit "$upstream"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "sync_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt || true
+            git merge --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "sync_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            {
+              echo "conflicts<<SYNC_EOF"
+              cat conflicts.txt
+              echo "SYNC_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: port
+        name: Check that the fork's tracked fixes survived
+        if: steps.merge.outputs.clean == 'true' && steps.merge.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/port_status.py --json > port.json
+          attention=$(python3 -c "import json; d=json.load(open('port.json')); print(sum(1 for x in d if x['detected'] in ('missing','partial')))")
+          echo "attention=$attention" >> "$GITHUB_OUTPUT"
+          if [ "$attention" != "0" ]; then
+            python3 -c "import json; [print(f\"- {x['id']}: {x['detected']}\") for x in json.load(open('port.json')) if x['detected'] in ('missing','partial')]" > port-attention.md
+          fi
+
+      - id: pr
+        name: Push the sync branch and open or update its pull request
+        if: steps.merge.outputs.clean == 'true' && steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          BASE: ${{ inputs.branch || 'wolverine-bringup' }}
+          SHA: ${{ steps.upstream.outputs.sha }}
+          BEHIND: ${{ steps.merge.outputs.behind }}
+          ATTENTION: ${{ steps.port.outputs.attention }}
+        run: |
+          set -euo pipefail
+          short=$(git rev-parse --short=10 "$SHA")
+          gh auth setup-git
+          git push --force origin "$SYNC_BRANCH"
+          {
+            echo "Merge of \`up/main\` \`$SHA\` ($BEHIND commits) into \`$BASE\`."
+            echo
+            echo "- merge result: clean (no textual conflicts)"
+            echo "- tracked fork fixes needing attention: ${ATTENTION:-unknown}"
+            if [ "${ATTENTION:-0}" != "0" ] && [ -f port-attention.md ]; then
+              echo
+              sed 's/^/  /' port-attention.md
+            fi
+            echo
+            echo "This pull request is opened by the scheduled upstream-sync workflow. It is not merged automatically:"
+            echo "a clean textual merge still has to pass a full build, the focused tests and \`tools/port_status.py\` on a machine with a GPU."
+            echo
+            echo "- [ ] full build"
+            echo "- [ ] focused AGC, relinker and libkernel tests with \`ANYPS5_REQUIRE_VULKAN=1\` and \`ANYPS5_NO_SHADER_CACHE=1\`"
+            echo "- [ ] \`python3 tools/port_status.py\` reports 0 fixes needing attention"
+            echo "- [ ] the conventions workflow reports upstream's own commit subjects, which this pull request brings in; check only the fork's commits"
+          } > pr-body.md
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --title "chore: sync up/main ($short)" --body-file pr-body.md
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$SYNC_BRANCH" --title "chore: sync up/main ($short)" --body-file pr-body.md
+          fi
+
+      - name: Close the blocked issue once the merge is clean
+        if: steps.merge.outputs.clean == 'true' && steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Upstream sync blocked"' --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "up/main now merges into the integration branch; the sync pull request carries the result."
+          fi
+
+      - id: blocked
+        name: Record a conflict that a human has to resolve
+        if: steps.merge.outputs.clean != 'true' && steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          BASE: ${{ inputs.branch || 'wolverine-bringup' }}
+          SHA: ${{ steps.upstream.outputs.sha }}
+          BEHIND: ${{ steps.merge.outputs.behind }}
+        run: |
+          set -euo pipefail
+          short=$(git rev-parse --short=10 "$SHA")
+          title="Upstream sync blocked"
+          {
+            echo "\`up/main\` \`$SHA\` ($short, $BEHIND commits) does not merge cleanly into \`$BASE\`."
+            echo
+            echo "Conflicted files:"
+            echo
+            sed 's/^/- /' conflicts.txt
+            echo
+            echo "Resolve them on a branch and push it as a pull request; the next scheduled run will update this issue."
+          } > issue-body.md
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Upstream sync"
+            echo
+            echo "| item | value |"
+            echo "| --- | --- |"
+            echo "| upstream | \`${{ steps.upstream.outputs.sha }}\` |"
+            echo "| integration branch | \`${{ inputs.branch || 'wolverine-bringup' }}\` |"
+            echo "| commits behind | ${{ steps.merge.outputs.behind }} |"
+            echo "| changed | ${{ steps.merge.outputs.changed }} |"
+            echo "| clean merge | ${{ steps.merge.outputs.clean }} |"
+            echo "| fork fixes needing attention | ${{ steps.port.outputs.attention }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.merge.outputs.clean }}" != "true" ] && [ "${{ steps.merge.outputs.changed }}" = "true" ]; then
+            echo
+            echo "Conflicts:"
+            echo '```'
+            echo "${{ steps.merge.outputs.conflicts }}"
+            echo '```'
+          fi
+
+  build-hosted:
+    needs: merge-check
+    if: needs.merge-check.outputs.changed == 'true' && needs.merge-check.outputs.clean == 'true' && (inputs.build == 'hosted' || vars.SYNC_BUILD == 'hosted')
+    runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: sync/upstream
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the submodules
+        run: git submodule update --init --recursive --depth 1 --jobs 8
+
+      - name: Use the CA bundle of Git for Windows
+        run: |
+          for prefix in ucrt64 mingw64; do
+            bundle="C:/Program Files/Git/$prefix/etc/ssl/certs/ca-bundle.crt"
+            if [ -f "$bundle" ]; then echo "SSL_CERT_FILE=$bundle" >> "$GITHUB_ENV"; exit 0; fi
+          done
+          echo "::error::No CA bundle found in Git for Windows"; exit 1
+
+      - id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: Add-Content -LiteralPath $env:GITHUB_PATH -Value "$env:MSYS2_LOCATION\ucrt64\bin"
+
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: upstream-sync-hosted
+          save: false
+          evict-old-files: job
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          "-DANYPS5_AGC_EXECUTION_TESTS=F16ToF32Unpack;F64FmaSubnormals;RegistrationPrepareShutdown"
+
+      - name: Check that every test executable is registered with ctest
+        run: python tools/check_test_registration.py build
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Build the patched libraries
+        run: cmake --build build --target libs
+
+      - name: Tests
+        working-directory: build
+        run: ctest --output-on-failure --timeout 120 --parallel 4 --no-tests=error
+
+  build-self-hosted:
+    needs: merge-check
+    if: needs.merge-check.outputs.changed == 'true' && needs.merge-check.outputs.clean == 'true' && (inputs.build == 'self-hosted' || vars.SYNC_BUILD == 'self-hosted')
+    runs-on: [self-hosted, windows, x64, anyps5]
+    timeout-minutes: 300
+    env:
+      ANYPS5_REQUIRE_VULKAN: 1
+      ANYPS5_NO_SHADER_CACHE: 1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: sync/upstream
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the submodules
+        shell: pwsh
+        run: git submodule update --init --recursive --jobs 8
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+          cmake -S . -B build-sync -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON `
+            -DCMAKE_C_COMPILER=C:/msys64/ucrt64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/g++.exe
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+          cmake --build build-sync --parallel 20
+
+      - name: Check that every test executable is registered with ctest
+        shell: pwsh
+        run: python tools/check_test_registration.py build-sync
+
+      - name: Build the patched libraries
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+          cmake --build build-sync --target libs --parallel 20
+
+      - name: Porting tracker
+        shell: pwsh
+        run: |
+          python tools/port_status.py
+          $json = python tools/port_status.py --json | ConvertFrom-Json
+          $missing = @($json | Where-Object { $_.detected -in @('missing', 'partial') })
+          if ($missing.Count -ne 0) { throw "$($missing.Count) tracked fork fixes need attention" }
+
+      - name: Tests
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+          ctest --test-dir build-sync --output-on-failure --timeout 120 --parallel 8 --no-tests=error
+
+  report:
+    needs: [merge-check, build-hosted, build-self-hosted]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "### Upstream sync result"
+            echo
+            echo "- merge clean: ${{ needs.merge-check.outputs.clean }}"
+            echo "- fork fixes needing attention: ${{ needs.merge-check.outputs.attention }}"
+            echo "- hosted build: ${{ needs.build-hosted.result }}"
+            echo "- self-hosted build: ${{ needs.build-self-hosted.result }}"
+          } >> "$GITHUB_STEP_SUMMARY"
