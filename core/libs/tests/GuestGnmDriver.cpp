@@ -10,35 +10,7 @@
 #include <stdexcept>
 #include <string>
 
-extern "C" {
-std::uint32_t APS5_VABI sceGnmDrawInitDefaultHardwareState175(std::uint32_t* cmd, std::uint32_t size);
-std::uint32_t APS5_VABI sceGnmDrawInitDefaultHardwareState350(std::uint32_t* cmd, std::uint32_t size);
-std::uint32_t APS5_VABI sceGnmDispatchInitDefaultHardwareState(std::uint32_t* cmd, std::uint32_t size);
-int APS5_VABI sceGnmDrawIndexAuto(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint32_t flags);
-int APS5_VABI sceGnmDrawIndex(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint64_t indexAddress, std::uint32_t flags, std::uint32_t cachePolicy);
-int APS5_VABI sceGnmDrawIndexOffset(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexOffset, std::uint32_t indexCount, std::uint32_t flags);
-int APS5_VABI sceGnmDrawIndexIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr,
-    std::uint32_t flags);
-int APS5_VABI sceGnmDrawIndexIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr,
-    std::uint32_t instanceSgpr, std::uint32_t flags);
-int APS5_VABI sceGnmDrawIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags);
-int APS5_VABI sceGnmDrawIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr,
-    std::uint32_t instanceSgpr, std::uint32_t flags);
-int APS5_VABI sceGnmDrawInitToDefaultContextState(std::uint32_t* cmd, std::uint32_t size);
-int APS5_VABI sceGnmResetVgtControl(std::uint32_t* cmd, std::uint32_t size);
-int APS5_VABI sceGnmSetVgtControl(std::uint32_t* cmd, std::uint32_t size, std::uint32_t primGroupSizeMinusOne, std::uint32_t partialVsWaveMode, std::uint32_t switchOnlyOnEop);
-int APS5_VABI sceGnmSetCsShader(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs);
-int APS5_VABI sceGnmSetPsShader350(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs);
-int APS5_VABI sceGnmSetCsShaderWithModifier(std::uint32_t* cmd, std::uint32_t size, const std::uint32_t* regs, std::uint32_t modifier);
-int APS5_VABI sceGnmSetEmbeddedPsShader(std::uint32_t* cmd, std::uint32_t size, std::uint32_t shaderId, std::uint32_t cachePolicy);
-int APS5_VABI sceGnmSetEmbeddedVsShader(std::uint32_t* cmd, std::uint32_t size, std::uint32_t shaderId, std::uint32_t cachePolicy);
-int APS5_VABI sceGnmInsertPushMarker(std::uint32_t* cmd, std::uint32_t size, const char* marker);
-int APS5_VABI sceGnmInsertPopMarker(std::uint32_t* cmd, std::uint32_t size);
-int APS5_VABI sceGnmSubmitCommandBuffers(std::uint32_t count, std::uint32_t* const* dcbs, const std::uint32_t* dcbBytes, std::uint32_t* const* ccbs, const std::uint32_t* ccbBytes);
-int APS5_VABI sceGnmSubmitAndFlipCommandBuffers(std::uint32_t count, std::uint32_t* const* dcbs, const std::uint32_t* dcbBytes, std::uint32_t* const* ccbs, const std::uint32_t* ccbBytes,
-    std::uint32_t handle, std::uint32_t index, std::uint32_t flipMode, std::int64_t flipArg);
-int APS5_VABI sceGnmSubmitDone();
-}
+#include "prx/libSceGnmDriver/libSceGnmDriver.hpp"
 
 namespace {
 

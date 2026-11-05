@@ -9,6 +9,8 @@
 #include "prx/libc/include/FilesystemError.hpp"
 #include "prx/libc/include/PreciseWait.hpp"
 #include "prx/libc/include/GuestArena.hpp"
+#include "prx/libc/include/GuestErrno.hpp"
+#include "prx/libkernel/include/Api.hpp"
 #include "prx/libkernel/Apr/include/AprCommandBuffer.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
 #include "prx/libkernel/File/include/NativeStat.hpp"
@@ -36,10 +38,7 @@
 #include <windows.h>
 #endif
 
-extern "C" int* APS5_VABI __error_nid_postfix();
-
 namespace {
-
 constexpr int GUEST_ENOENT = 2;
 constexpr int GUEST_EINVAL = 22;
 
@@ -780,8 +779,6 @@ std::optional<Deferred> _execute(const Apr::CommandBufferObject& buffer, std::ui
 }
 
 extern "C" {
-
-int APS5_VABI sceKernelAllocateDirectMemory(int64_t searchStart, int64_t searchEnd, size_t length, size_t alignment, int memoryType, int64_t* offset);
 
 int AmmGiveDirectMemory_nid_no_patch(std::int64_t searchStart, std::int64_t searchEnd, std::size_t size, std::size_t alignment, int usage, std::int64_t* offset) {
     if (!offset || (usage != 0 && usage != 1)) return SCE_KERNEL_ERROR_EINVAL;
