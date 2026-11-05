@@ -145,7 +145,7 @@ std::vector<ProgramHeader> ElfReader::ReadProgramHeaders() const {
         ph.MemorySize = _readU64At(offset + 0x28);
         ph.Alignment = _readU64At(offset + kPhdrAlignOffset);
 
-        if (ph.Alignment > 1 && !std::has_single_bit(ph.Alignment)) {
+        if (ph.Type != PT_LOAD && ph.Type != PT_TLS && ph.Alignment > 1 && !std::has_single_bit(ph.Alignment)) {
             throw RelinkerException("Program header alignment is not a power of two", offset + kPhdrAlignOffset);
         }
 
@@ -314,23 +314,30 @@ std::vector<DynamicTag> ElfReader::ReadDynamicTags(const ProgramHeader& dynamicH
     FileByteOffset offset = dynamicHeader.Offset;
     const FileByteOffset end = dynamicHeader.Offset + dynamicHeader.FileSize;
 
+    bool terminated = false;
     while (end - offset >= 16) {
         DynamicTag tag;
         tag.Tag = static_cast<std::int64_t>(_readU64At(offset));
         tag.Value = _readU64At(offset + 0x08);
 
         if (tag.Tag == 0) {
-            return tags;
+            terminated = true;
+            break;
         }
 
+        tags.push_back(tag);
+        offset += 16;
+    }
+
+    if (!terminated) throw RelinkerException("Unterminated dynamic segment", dynamicHeader.Offset);
+
+    offset = dynamicHeader.Offset;
+    for (const auto& tag : tags) {
         if ((tag.Tag == DT_SYMENT || tag.Tag == DT_OS_SYMENT) && tag.Value != 24) {
             throw RelinkerException("Unsupported DT_SYMENT value: " + std::to_string(tag.Value) + "; expected 24 bytes", offset);
         }
         if ((tag.Tag == DT_RELAENT || tag.Tag == DT_OS_RELAENT) && tag.Value != 24) {
             throw RelinkerException("Unsupported DT_RELAENT value: " + std::to_string(tag.Value) + "; expected 24 bytes", offset);
-        }
-        if (tag.Tag == DT_RELENT && tag.Value != 16) {
-            throw RelinkerException("Unsupported DT_RELENT value: " + std::to_string(tag.Value) + "; expected 16 bytes", offset);
         }
         if ((tag.Tag == DT_PLTREL || tag.Tag == DT_OS_PLTREL) && tag.Value != 7 && tag.Value != 17) {
             throw RelinkerException("Unsupported DT_PLTREL type: " + std::to_string(tag.Value) + "; expected DT_RELA (7) or DT_REL (17)", offset);
@@ -341,15 +348,10 @@ std::vector<DynamicTag> ElfReader::ReadDynamicTags(const ProgramHeader& dynamicH
         if ((tag.Tag == DT_PLTRELSZ || tag.Tag == DT_OS_PLTRELSZ) && tag.Value % 24 != 0) {
             throw RelinkerException("Invalid DT_PLTRELSZ value: " + std::to_string(tag.Value) + " bytes; expected a multiple of 24 bytes", offset);
         }
-        if (tag.Tag == DT_RELSZ && tag.Value % 16 != 0) {
-            throw RelinkerException("Invalid DT_RELSZ value: " + std::to_string(tag.Value) + " bytes; expected a multiple of 16 bytes", offset);
-        }
-
-        tags.push_back(tag);
         offset += 16;
     }
 
-    throw RelinkerException("Unterminated dynamic segment", dynamicHeader.Offset);
+    return tags;
 }
 
 FileByteOffset ElfReader::TranslateVirtualAddress(VirtualAddress address) const {
