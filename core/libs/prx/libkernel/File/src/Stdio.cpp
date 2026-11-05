@@ -335,6 +335,10 @@ static std::int64_t NativePositionedTransfer(int descriptor, void* buf, std::siz
     }
     if (write) {
         if (File::HasFixedSizeWrites(descriptor)) {
+            if (File::SharedMemoryDescriptorWritable_nid_no_patch(descriptor) == 0) {
+                errno = EBADF;
+                return -1;
+            }
             if (!File::LimitSharedMemoryWrite_nid_no_patch(descriptor, nbytes, offset)) return -1;
             if (nbytes == 0) return 0;
         }
@@ -411,6 +415,10 @@ static std::int64_t NativeTransferBuffer(int descriptor, void* buf, std::size_t 
     }
     if (write) {
         if (File::HasFixedSizeWrites(descriptor)) {
+            if (File::SharedMemoryDescriptorWritable_nid_no_patch(descriptor) == 0) {
+                errno = EBADF;
+                return -1;
+            }
             const auto position = WithoutParameterHandler([descriptor] { return ::_lseeki64(descriptor, 0, SEEK_CUR); });
             if (position < 0 || !File::LimitSharedMemoryWrite_nid_no_patch(descriptor, nbytes, position)) return -1;
             if (nbytes == 0) return 0;
