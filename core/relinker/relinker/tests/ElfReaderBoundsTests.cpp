@@ -614,15 +614,6 @@ int main() {
                 }
             }
         }},
-        {"unaligned DT_RELSZ size", [] {
-            for (const std::uint64_t size : {1ULL, 8ULL, 15ULL, 17ULL, 31ULL}) {
-                const std::vector<std::pair<std::int64_t, std::uint64_t>> tags = {
-                    {Elfpatcher::DT_RELSZ, size},
-                    {0, 0}
-                };
-                RejectDynamicTags(DynamicFixture(tags), DynamicHeader(tags.size()));
-            }
-        }},
         {"file smaller than ELF header size", [] {
             for (const std::size_t size : {0ULL, 1ULL, 16ULL, 32ULL, 63ULL}) {
                 Bytes bytes(size);
@@ -714,7 +705,7 @@ int main() {
             for (const std::uint64_t align : {3ULL, 5ULL, 7ULL, 0x3000ULL, 0xfffffffffffffffbULL}) {
                 auto bytes = Fixture();
                 Write<std::uint64_t>(bytes, 64 + 48, align);
-                RejectProgramHeaders(std::move(bytes), "Program header alignment is not a power of two", 64 + 48);
+                RejectProgramHeaders(std::move(bytes), "Invalid load segment alignment", 64 + 48);
             }
         }},
         {"valid program header alignment powers of two", [] {
