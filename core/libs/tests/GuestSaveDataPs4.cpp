@@ -2,6 +2,7 @@
 #include "prx/libSceSaveData.native/include/Api.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "SceTypes.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
