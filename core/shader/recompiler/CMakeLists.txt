@@ -251,6 +251,7 @@ ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Translation/src/NggPassthrough.cpp
             BuildTessellationCaptureGeometryShader
             CaptureResources
             DebugProbeActive
+            DecodeRdnaInstruction
             DepthBitsTextureWidth
             HashBytes
             LayoutBarycentricEmulation
@@ -269,6 +270,7 @@ ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Translation/src/NggPassthrough.cpp
             RayTracingStrict
             RayTracingMiss
             ReadWholeFile
+            SetDiagnosticSink
             Recompile
             RecompileCacheKey::ContextHash
             RecompileCacheKey::SealFeatureDigest
@@ -292,6 +294,7 @@ ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Translation/src/NggPassthrough.cpp
             GcnImagePitch
             GcnImagePow2Pad
             RuntimeAbi::HeapCapacity
+            RuntimeAbi::UintStorageImageBinding
             SampledTextureNumericClass
             SetDebugProbeActive
             SrtEvaluatingBranch
