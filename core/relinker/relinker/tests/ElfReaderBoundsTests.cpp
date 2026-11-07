@@ -1034,17 +1034,17 @@ int main() {
         }},
         {"covered SCE RELRO file size exceeds memory size", [] {
             RejectProgramHeaders(CoveredRelroFixture(0x240, 64, 32));
-        },
+        }},
         {"covered SCE RELRO file range past end of file", [] {
             RejectProgramHeaders(CoveredRelroFixture(0x2f0, 64, 64));
-        },
+        }},
         {"sh_link section header index out of bounds", [] {
             auto bytes = Fixture();
             Write<std::uint32_t>(bytes, 196, 2);
             Write<std::uint32_t>(bytes, 232, 3);
             Write<std::uint32_t>(bytes, 192, 21);
             RejectSections(std::move(bytes));
-        },
+        }},
         {"SHT_DYNSYM section entry size mismatch", [] {
             for (const std::uint64_t entrySize : {0ULL, 1ULL, 16ULL, 20ULL, 23ULL, 25ULL, 32ULL, 64ULL}) {
                 auto bytes = Fixture();
@@ -1052,7 +1052,7 @@ int main() {
                 Write<std::uint64_t>(bytes, 248, entrySize);
                 RejectSections(std::move(bytes));
             }
-        },
+        }},
         {"SHT_RELA section entry size mismatch", [] {
             for (const std::uint64_t entrySize : {0ULL, 1ULL, 16ULL, 20ULL, 23ULL, 25ULL, 32ULL, 64ULL}) {
                 auto bytes = Fixture();
@@ -1060,7 +1060,7 @@ int main() {
                 Write<std::uint64_t>(bytes, 248, entrySize);
                 RejectSections(std::move(bytes));
             }
-        },
+        }},
         {"SHT_REL section entry size mismatch", [] {
             for (const std::uint64_t entrySize : {0ULL, 1ULL, 8ULL, 12ULL, 15ULL, 17ULL, 24ULL, 32ULL}) {
                 auto bytes = Fixture();
@@ -1068,7 +1068,7 @@ int main() {
                 Write<std::uint64_t>(bytes, 248, entrySize);
                 RejectSections(std::move(bytes));
             }
-        },
+        }},
         {"DT_SYMENT and DT_OS_SYMENT dynamic size mismatch", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_SYMENT, Elfpatcher::DT_OS_SYMENT}) {
                 for (const std::uint64_t size : {0ULL, 1ULL, 8ULL, 16ULL, 20ULL, 23ULL, 25ULL, 32ULL}) {
@@ -1079,7 +1079,7 @@ int main() {
                     RejectTagsOnly(TagsOnlyFixture(tags), TagsOnlyHeader(tags.size()));
                 }
             }
-        },
+        }},
         {"valid DT_SYMENT and DT_OS_SYMENT dynamic size", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_SYMENT, Elfpatcher::DT_OS_SYMENT}) {
                 const std::vector<std::pair<std::int64_t, std::uint64_t>> tags = {
@@ -1089,7 +1089,7 @@ int main() {
                 const auto parsed = Relinker::ElfReader(TagsOnlyFixture(tags)).ReadDynamicTags(TagsOnlyHeader(tags.size()));
                 Require(parsed.size() == 1 && parsed[0].Tag == tag && parsed[0].Value == 24);
             }
-        },
+        }},
         {"DT_RELAENT and DT_OS_RELAENT dynamic entry size mismatch", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_RELAENT, Elfpatcher::DT_OS_RELAENT}) {
                 for (const std::uint64_t size : {0ULL, 1ULL, 16ULL, 20ULL, 23ULL, 25ULL, 32ULL}) {
@@ -1100,7 +1100,7 @@ int main() {
                     RejectTagsOnly(TagsOnlyFixture(tags), TagsOnlyHeader(tags.size()));
                 }
             }
-        },
+        }},
         {"unsupported DT_PLTREL and DT_OS_PLTREL type", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_PLTREL, Elfpatcher::DT_OS_PLTREL}) {
                 for (const std::uint64_t type : {0ULL, 1ULL, 2ULL, 8ULL, 20ULL}) {
@@ -1111,7 +1111,7 @@ int main() {
                     RejectTagsOnly(TagsOnlyFixture(tags), TagsOnlyHeader(tags.size()));
                 }
             }
-        },
+        }},
         {"unaligned DT_RELASZ and DT_OS_RELASZ size", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_RELASZ, Elfpatcher::DT_OS_RELASZ}) {
                 for (const std::uint64_t size : {1ULL, 12ULL, 23ULL, 25ULL, 35ULL, 47ULL}) {
@@ -1122,7 +1122,7 @@ int main() {
                     RejectTagsOnly(TagsOnlyFixture(tags), TagsOnlyHeader(tags.size()));
                 }
             }
-        },
+        }},
         {"unaligned DT_PLTRELSZ and DT_OS_PLTRELSZ size", [] {
             for (const std::int64_t tag : {Elfpatcher::DT_PLTRELSZ, Elfpatcher::DT_OS_PLTRELSZ}) {
                 for (const std::uint64_t size : {1ULL, 12ULL, 23ULL, 25ULL, 35ULL, 47ULL}) {
@@ -1133,14 +1133,14 @@ int main() {
                     RejectTagsOnly(TagsOnlyFixture(tags), TagsOnlyHeader(tags.size()));
                 }
             }
-        },
+        }},
         {"file smaller than ELF header size", [] {
             for (const std::size_t size : {0ULL, 1ULL, 16ULL, 32ULL, 63ULL}) {
                 Bytes bytes(size);
                 RejectHeader(bytes, "File too small for ELF header");
                 RejectMagic(std::move(bytes), "File too small for ELF header");
             }
-        },
+        }},
         {"SELF container magic rejection", [] {
             for (const std::uint32_t magic : {0x1d3d154fu, 0xeef51454u}) {
                 auto bytes = Fixture();
@@ -1148,7 +1148,7 @@ int main() {
                 RejectHeader(bytes, "The input is a SELF container, not an ELF");
                 RejectMagic(std::move(bytes), "The input is a SELF container, not an ELF");
             }
-        },
+        }},
         {"invalid ELF magic number", [] {
             for (const auto& magic : {
                 std::vector<std::uint8_t>{0x00, 'E', 'L', 'F'},
@@ -1161,56 +1161,56 @@ int main() {
                 RejectHeader(bytes, "Invalid ELF magic number");
                 RejectMagic(std::move(bytes), "Invalid ELF magic number");
             }
-        },
+        }},
         {"invalid ELF class", [] {
             for (const std::uint8_t cls : {0u, 1u, 3u, 255u}) {
                 auto bytes = Fixture();
                 bytes[4] = cls;
                 RejectHeader(std::move(bytes), "Expected little-endian ELF64 version 1");
             }
-        },
+        }},
         {"invalid ELF data encoding", [] {
             for (const std::uint8_t encoding : {0u, 2u, 3u, 255u}) {
                 auto bytes = Fixture();
                 bytes[5] = encoding;
                 RejectHeader(std::move(bytes), "Expected little-endian ELF64 version 1");
             }
-        },
+        }},
         {"invalid ELF version in ident", [] {
             for (const std::uint8_t version : {0u, 2u, 3u, 255u}) {
                 auto bytes = Fixture();
                 bytes[6] = version;
                 RejectHeader(std::move(bytes), "Expected little-endian ELF64 version 1");
             }
-        },
+        }},
         {"invalid ELF machine", [] {
             for (const std::uint16_t machine : {0u, 3u, 40u, 61u, 63u, 183u, 0xffffu}) {
                 auto bytes = Fixture();
                 Write<std::uint16_t>(bytes, 0x12, machine);
                 RejectHeader(std::move(bytes), "Expected an x86-64 ELF");
             }
-        },
+        }},
         {"unsupported ELF object version", [] {
             for (const std::uint32_t version : {0u, 2u, 3u, 0xffffffffu}) {
                 auto bytes = Fixture();
                 Write<std::uint32_t>(bytes, 0x14, version);
                 RejectHeader(std::move(bytes), "Unsupported ELF object version: expected 1", 0x14);
             }
-        },
+        }},
         {"invalid ELF header size", [] {
             for (const std::uint16_t size : {0u, 52u, 60u, 63u, 65u, 128u, 0xffffu}) {
                 auto bytes = Fixture();
                 Write<std::uint16_t>(bytes, 0x34, size);
                 RejectHeader(std::move(bytes), "Invalid ELF header size: expected 64 bytes", 0x34);
             }
-        },
+        }},
         {"ELF program header entry size mismatch", [] {
             for (const std::uint16_t entrySize : {0u, 48u, 55u, 57u, 64u, 0xffffu}) {
                 auto bytes = Fixture();
                 Write<std::uint16_t>(bytes, 0x36, entrySize);
                 RejectProgramHeaders(std::move(bytes), "Invalid ELF program header entry size: expected 56 bytes", 0x36);
             }
-        },
+        }},
         {"valid ELF header fields", [] {
             const auto header = Relinker::ElfReader(Fixture()).ReadHeader();
             Require(header.Machine == 62);
@@ -1220,14 +1220,14 @@ int main() {
             Require(header.SectionHeaderEntrySize == 64);
             Require(header.SectionHeaderCount == 3);
             Require(header.SectionHeaderStringIndex == 2);
-        },
+        }},
         {"program header alignment is not a power of two", [] {
             for (const std::uint64_t align : {3ULL, 5ULL, 7ULL, 0x3000ULL, 0xfffffffffffffffbULL}) {
                 auto bytes = Fixture();
                 Write<std::uint64_t>(bytes, 64 + 48, align);
                 RejectProgramHeaders(std::move(bytes), "Invalid load segment alignment", 64 + 48);
             }
-        },
+        }},
         {"valid program header alignment powers of two", [] {
             for (const std::uint64_t align : {0ULL, 1ULL, 2ULL, 4ULL, 8ULL, 16ULL, 0x1000ULL, 0x4000ULL, 0x10000ULL}) {
                 auto bytes = Fixture();
@@ -1235,7 +1235,7 @@ int main() {
                 const auto headers = Relinker::ElfReader(std::move(bytes)).ReadProgramHeaders();
                 Require(headers.size() == 1 && headers[0].Alignment == align);
             }
-        },
+        }},
     };
     std::size_t failures = 0;
     for (const auto& [name, test] : cases) {
