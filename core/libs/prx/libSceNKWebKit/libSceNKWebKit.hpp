@@ -1,4 +1,5 @@
 #pragma once
+#include "prx/libSceNKWebKit/include/HTTPHeaderFieldExports.hpp"
 #include "prx/libSceNKWebKit/include/LegacyExports.hpp"
 
 #include "prx/libSceNKWebKit/include/Api.hpp"
@@ -22,3 +23,5 @@
 #include "prx/libSceNKWebKit/include/WtfValueExports.hpp"
 #include "prx/libSceNKWebKit/include/RegionExports.hpp"
 #include "prx/libSceNKWebKit/include/UrlHelpers.hpp"
+
+#include "prx/libSceNKWebKit/include/HttpHeaderMapExports.hpp"
