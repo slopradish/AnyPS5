@@ -28,9 +28,11 @@
 
 #include "prx/libc/include/Api.hpp"
 #include "prx/libSceJxr/include/Api.hpp"
+#include "src/EncoderMetadata.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include "Stream.hpp"
 #include "prx/libc/include/GuestArena.hpp"
 #include "SceTypes.hpp"
@@ -135,18 +137,6 @@ std::int32_t APS5_VABI EOSWS_Memory_nid_postfix(Jxr::Stream* stream) {
     return stream->state[MemorySize] <= stream->state[MemoryPosition];
 }
 
-int APS5_VABI GetImageDecodeIID_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI GetImageEncodeIID_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI GetPixelFormatFromHash_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI GetPosWS_File_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
@@ -159,18 +149,6 @@ std::int64_t APS5_VABI GetPosWS_Memory_nid_postfix(Jxr::Stream* stream, std::siz
     if (!stream || !position) APS5_INVALID_ARG_EX;
     *position = stream->state[MemoryPosition];
     return WmpErrSuccess;
-}
-
-int APS5_VABI IDPEmpty_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI InitZigzagScan_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI PKAllocAligned_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
 }
 
 int APS5_VABI PKCodecFactory_CreateCodec_nid_postfix() {
@@ -205,8 +183,8 @@ int APS5_VABI PKCreateFactory_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-std::int64_t APS5_VABI PKFormatConverter_Convert_nid_postfix(void* converter, const void* rect, std::uint8_t* pixels, std::uint32_t stride) {
-    return WmpErrSuccess;
+int APS5_VABI PKFormatConverter_Convert_nid_postfix() {
+    NotImplemented_nid_no_patch(__func__);
 }
 
 int APS5_VABI PKFormatConverter_Copy_nid_postfix() {
@@ -238,10 +216,6 @@ int APS5_VABI PKFormatConverter_Initialize_nid_postfix() {
 }
 
 int APS5_VABI PKFormatConverter_Release_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI PKFreeAligned_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
@@ -289,12 +263,12 @@ int APS5_VABI PKImageDecode_Release_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-std::int64_t APS5_VABI PKImageDecode_SelectFrame_nid_postfix(void* decoder, std::uint32_t frame) {
-    return WmpErrSuccess;
+int APS5_VABI PKImageDecode_SelectFrame_nid_postfix() {
+    NotImplemented_nid_no_patch(__func__);
 }
 
-std::int64_t APS5_VABI PKImageEncode_CreateNewFrame_nid_postfix(void* encoder, void* param, std::size_t paramSize) {
-    return WmpErrSuccess;
+int APS5_VABI PKImageEncode_CreateNewFrame_nid_postfix() {
+    NotImplemented_nid_no_patch(__func__);
 }
 
 int APS5_VABI PKImageEncode_Create_WMP_nid_postfix() {
@@ -321,8 +295,11 @@ int APS5_VABI PKImageEncode_SetDescriptiveMetadata_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI PKImageEncode_SetEXIFMetadata_WMP_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
+std::int64_t APS5_VABI PKImageEncode_SetEXIFMetadata_WMP_nid_postfix(
+    tagPKImageEncode* encoder, const std::uint8_t* metadata, std::uint32_t size) {
+    return Jxr::SetImageEncodeMetadata(
+        static_cast<void*>(encoder), metadata, size, offsetof(Jxr::ImageEncodeMetadataPrefix, exifMetadata),
+        offsetof(Jxr::ImageEncodeMetadataPrefix, exifMetadataByteCount));
 }
 
 int APS5_VABI PKImageEncode_SetGPSInfoMetadata_WMP_nid_postfix() {
@@ -353,8 +330,8 @@ int APS5_VABI PKImageEncode_SetXMPMetadata_WMP_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-std::int64_t APS5_VABI PKImageEncode_Terminate_nid_postfix(void* encoder) {
-    return WmpErrSuccess;
+int APS5_VABI PKImageEncode_Terminate_nid_postfix() {
+    NotImplemented_nid_no_patch(__func__);
 }
 
 int APS5_VABI PKImageEncode_Transcode_nid_postfix() {
@@ -468,14 +445,6 @@ int APS5_VABI allocateTileInfo_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI attachISRead_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI attachISWrite_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI attach_SB_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
@@ -496,27 +465,7 @@ int APS5_VABI detach_SB_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI dquantBits_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI fillToByte_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI flushBit16_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI flushToByte_SB_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI flushToByte_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI formatQuantizer_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
@@ -532,31 +481,7 @@ int APS5_VABI freeTileInfo_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI getACPredMode_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getBit16_S_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getBit16_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getBit16s_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI getBit32_SB_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getBit32_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getBool16_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
@@ -568,18 +493,6 @@ int APS5_VABI getDCACPredMode_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI getPosRead_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getSizeRead_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI getSizeWrite_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
 int APS5_VABI getTilePos_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
@@ -588,12 +501,33 @@ int APS5_VABI initMRPtr_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI initPostProc_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
+std::int32_t APS5_VABI initPostProc_nid_postfix(JxrGuestPostProcInfo* (*postProcInfo)[2], std::size_t mbWidth, std::size_t numChannels) {
+    if (numChannels != 0 && postProcInfo == nullptr) APS5_INVALID_ARG_EX;
 
-int APS5_VABI peekBit16_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
+    for (std::size_t channel = 0; channel < numChannels; ++channel) {
+        for (std::size_t slot = 0; slot < 2; ++slot) {
+            if (sizeof(int) == 4 && ((((mbWidth + 2) >> 16) * sizeof(JxrGuestPostProcInfo)) & 0xffff0000)) return -1;
+
+            if (mbWidth > std::numeric_limits<std::size_t>::max() - 2 ||
+                mbWidth + 2 > std::numeric_limits<std::size_t>::max() / sizeof(JxrGuestPostProcInfo)) APS5_INVALID_ARG_EX;
+
+            auto* allocation = static_cast<JxrGuestPostProcInfo*>(malloc_nid_postfix((mbWidth + 2) * sizeof(JxrGuestPostProcInfo)));
+            postProcInfo[channel][slot] = allocation;
+            if (allocation == nullptr) return -1;
+            ++postProcInfo[channel][slot];
+
+            auto* leftBoundary = postProcInfo[channel][slot] - 1;
+            leftBoundary->mbTexture = 3;
+            for (std::size_t row = 0; row < 4; ++row) {
+                for (std::size_t column = 0; column < 4; ++column) {
+                    leftBoundary->blockTexture[row][column] = 3;
+                }
+            }
+            std::memcpy(postProcInfo[channel][slot] + mbWidth, leftBoundary, sizeof(*leftBoundary));
+        }
+    }
+
+    return 0;
 }
 
 int APS5_VABI postProcBlock_nid_postfix() {
@@ -601,22 +535,6 @@ int APS5_VABI postProcBlock_nid_postfix() {
 }
 
 int APS5_VABI postProcMB_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI putBit16_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI putBit16z_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI putBit32_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
-}
-
-int APS5_VABI remapQP_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
@@ -636,8 +554,16 @@ int APS5_VABI swapMRPtr_nid_postfix() {
     NotImplemented_nid_no_patch(__func__);
 }
 
-int APS5_VABI termPostProc_nid_postfix() {
-    NotImplemented_nid_no_patch(__func__);
+void APS5_VABI termPostProc_nid_postfix(JxrGuestPostProcInfo* (*postProcInfo)[2], std::size_t numChannels) {
+    if (numChannels != 0 && postProcInfo == nullptr) APS5_INVALID_ARG_EX;
+
+    for (std::size_t channel = 0; channel < numChannels; ++channel) {
+        for (std::size_t slot = 0; slot < 2; ++slot) {
+            if (postProcInfo[channel][slot] != nullptr) {
+                free_nid_postfix(postProcInfo[channel][slot] - 1);
+            }
+        }
+    }
 }
 
 int APS5_VABI updatePostProcInfo_nid_postfix() {
