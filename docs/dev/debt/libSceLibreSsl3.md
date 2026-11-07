@@ -54,18 +54,13 @@
 
 - [SSL_SESSION_get_timeout, SSL_SESSION_set_time and SSL_SESSION_get_protocol_version](../../../core/libs/prx/libSceLibreSsl3/src/SessionMetadata.cpp) - forwarded session lifecycle interoperability, independent console execution, resumption, serialization and expiry remain unverified. The fields follow [LibreSSL 4.0.0](https://github.com/libressl/openbsd/tree/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libssl). [LibreSSL 2.5.4](https://github.com/libressl/openbsd/blob/2e2c612066aa993717528a0249c15c51128d61cb/src/lib/libssl/ssl.h) instead puts timeout/time at 144/152; these accessors must not receive that older layout. Tests use caller-owned storage. A null protocol-version input throws instead of dereferencing it.
 - [Session metadata fields](../../../core/libs/prx/libSceLibreSsl3/src/SessionMetadata.cpp) - other firmware revisions are unverified. [BunnyFl reports disassembly only](https://github.com/boykopovar/AnyPS5/pull/15119#pullrequestreview-5742135511) of firmware 13.42 `system/common/lib/libSceLibreSsl3.sprx` (SHA256 `ee2c529c87fe21b7ef1e5f13d10c47ee90944f52a1f848fe0995e031817c2c3a`): getter `0xf2130` reads 64-bit timeout at 168 with null returning zero; setter `0xf2150` writes 64-bit creation time at 176 and returns it, with null returning zero; getter `0xf2170` reads 32-bit version at 0 without a null check. The module and listing have not been independently acquired or executed here.
-
 - [tls_config_parse_protocols](../../../core/libs/prx/libSceLibreSsl3/src/TlsProtocols.cpp) has no independent console execution or TLS configuration interoperability verification. Parsing follows [LibreSSL 4.0.0](https://github.com/libressl/openbsd/tree/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libtls). A null output pointer throws instead of an upstream fault. Tests use caller-owned text/output and guest-heap allocation failure; other TLS configuration and handshake exports are only partly implemented. Closes when: console grammar and TLS configuration interoperability are measured.
-
 - [Reported firmware 13.42 parser masks](../../../core/libs/prx/libSceLibreSsl3/src/TlsProtocols.cpp) come from a [contributor's disassembly](https://github.com/boykopovar/AnyPS5/pull/15045#pullrequestreview-5736573950) of `libSceLibreSsl3.sprx` (SHA-256 `ee2c529c87fe21b7ef1e5f13d10c47ee90944f52a1f848fe0995e031817c2c3a`), not independent execution here. The report identifies default/aggregate/negation-base mask `0x18` and explicit TLS 1.0/1.1/1.2/1.3 bits `2`/`4`/`8`/`16`, matching this implementation. Other firmware revisions, complete grammar and real TLS configuration use remain unverified.
-
 - [EVP_PKEY_size, EVP_PKEY_security_bits and EVP_PKEY_cmp](../../../core/libs/prx/libSceLibreSsl3/src/PkeyQueries.cpp) have no console ABI or behavior verification. Dispatch follows [LibreSSL 4.0.0](https://github.com/libressl/openbsd/blob/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/evp/p_lib.c) using the existing 32-byte key and the LP64 method slots in that revision's `evp_local.h`: public comparison at 56, size at 96, security bits at 112 and parameter comparison at 160. Tests use caller-owned keys and callbacks; real key-constructor and algorithm-method interoperability remains unverified. Null comparison operands, undefined upstream, throw; null size/security queries and missing callbacks keep upstream's distinct results. Malformed method pointers remain unverified. Closes when: layouts and complete key lifetimes are measured on a console.
 - [OBJ_find_sigid_algs](../../../core/libs/prx/libSceLibreSsl3/src/SignatureAlgorithms.cpp) - console identifiers/mappings and certificate interoperability are unverified. The shared parent registry reserves IDs from 956 for custom objects, so the 18 higher-ID mappings in [LibreSSL 4.0.0](https://github.com/libressl/openbsd/tree/ce488b78e0bd994780569df718596b9776ff681a/src/lib/libcrypto/objects) are unavailable: those inputs return no match without changing outputs, before or after object creation/cleanup. The remaining 33 mappings, including zero-digest identifiers, use built-in IDs below that boundary. A match does not establish availability of the named algorithms. Closes when: a compatible modern object registry and firmware mappings are verified.
-
 ### Additional callable export inventory
-
 - [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 145 still-unimplemented callable exports: 135 named and 10 known only by NID. These entries throw. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. The fourteen libtls lifecycle/config exports are implemented in `LibTls.cpp`; title compatibility beyond preconnection behavior remains unverified.
-
+- [Additional exports](../../../core/libs/prx/libSceLibreSsl3/AdditionalExports.cpp) declare 172 callable exports: 162 named and 10 known only by NID. Every entry throws. Parameterless `int` declarations are unknown-signature placeholders, not verified ABI contracts. Names/NIDs match the 13.60 export table. No functional implementation or title unblock is claimed.
 
 | Name | NID |
 | --- | --- |
@@ -110,7 +105,8 @@
 | `TLS_server_method` | `EtM5Jwx4EFo` |
 
 | `ERR_lib_error_string` | `F7jknWesBTY` |
-
+| `tls_close` | `Fqc0-3YCXjo` |
+| `tls_client` | `GEK3LmjM9Q4` |
 | `BIO_meth_set_ctrl` | `GFEaREp1UFw` |
 | `EVP_PKEY_get0_EC_KEY` | `GY2X+VHs568` |
 | `unknown` | `GjO5Ap3E-t4` |
@@ -150,7 +146,8 @@
 | `X509_STORE_load_locations` | `V3JtebYui1A` |
 
 | `ERR_func_error_string` | `VXuysR7ySzw` |
-
+| `EVP_get_digestbyname` | `Wm24hhTLqWM` |
+| `SSL_SESSION_set_time` | `XG3hIzt9VXY` |
 | `X509_set_issuer_name` | `XK3FmaTS6pg` |
 | `HMAC_CTX_free` | `YAxGqtnKQFY` |
 | `X509_add_ext` | `YJ7bfxMHniE` |

@@ -538,6 +538,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_TRACE_STAGING` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/GuestBufferMemory.cpp` |  | prints every distinct staged range once, with its size and whether an atomic element lies in it |
 | `APS5_TRACE_SUMMARY_EVERY` | integer | `core/libs/prx/libSceAgcDriver/Execution/include/PerformanceTrace.hpp` |  | seconds between periodic trace summaries, emitted on the next present |
 | `APS5_TRACE_TEXTURES` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` |  | prints a sampled texture's address, dimensions, format, tile mode, and how many of the bytes at offsets 0, 64, 128 and so on are nonzero |
+| `APS5_TRACE_TEXTURES` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/ShaderResources.cpp` |  | prints a sampled texture's bytes and how many are nonzero |
 | `APS5_TRACE_TEXTURE_CREATION` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp` |  | logs each texture made and each storage-image upload; off by default, it was a flushed write per texture on the queue-0 worker |
 | `APS5_TRACE_UNREADABLE` | presence | `core/libs/prx/libSceAgcDriver/Execution/src/GuestMemory.cpp` |  | names the code that checked an inaccessible range |
 | `APS5_TRACE_UPLOAD` | presence | `core/libs/prx/libSceAgcDriver/Graphics/src/Texture.cpp` |  | names why a storage image is uploaded again |
@@ -723,9 +724,7 @@ The code reads environment names through `getenv`, `IsEnvironmentSet`, `kibSetti
 | `APS5_COARSE_TIMED_WAITS` | presence | `core/libs/prx/libkernel/Time/TimedWait.cpp` |  | on Windows, rounds timed waits up to the scheduler tick |
 
 | `APS5_FAIL_UNKNOWN_CLOCKS` | presence | `core/libs/prx/libkernel/Time/Time.cpp` |  | makes `clock_gettime` and `clock_getres` fail with `EINVAL` for the clock ids 16 to 31 that are not implemented, instead of throwing |
-
 | `APS5_DIRECT_MEMORY_FROM_FLEXIBLE` | presence | `core/libs/prx/libkernel/DirectMemory/Export.cpp` |  | reports 12736 MiB less the configured flexible-memory size as the direct-memory size, and stops direct-memory allocation there, instead of 13824 MiB |
-
 | `APS5_GAME_MODE` | string | `core/libs/prx/libkernel/System/src/HostPerformanceProcess.cpp` | off | asks the host for its game or performance mode while the title runs, read when libkernel loads: `off`, `on` or `auto`; on Linux it requests Feral GameMode (`libgamemode.so.0`, loaded with dlopen) and on macOS it holds a user-initiated, latency-critical `NSProcessInfo` activity; `on` logs a missing library or backend once, `auto` stays silent about it, and a refused request is logged once in both; nothing here is fatal, and any other value stops the title with an error naming the variable |
 | `APS5_JOB_AFFINITY` | presence | `core/libs/prx/libkernel/Pthread/src/Thread.cpp` |  | on Windows, pins the title's job worker threads to the efficiency cores of a hybrid CPU |
 | `APS5_JOB_AFFINITY_MASK` | integer | `core/libs/prx/libkernel/Pthread/src/Thread.cpp` |  | on Windows, hex core mask that job worker threads are pinned to |

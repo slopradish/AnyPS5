@@ -180,6 +180,9 @@ static int MapFlags(int sceFlags) {
 }
 #endif
 
+extern "C" int* APS5_VABI __error_nid_postfix();
+extern "C" int APS5_VABI fcntl_nid_postfix(int descriptor, int command, ...);
+
 static int SceErrorFromErrno(int error) {
     const int guest = error > 0 && error <= 34 ? error : FilesystemError(std::error_code(error, std::generic_category()));
     return static_cast<int>(0x80020000u | static_cast<unsigned>(guest));

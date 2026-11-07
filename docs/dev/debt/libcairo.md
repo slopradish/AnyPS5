@@ -15,14 +15,10 @@
 - [Operator state and rectangle paths in Context.cpp](../../../core/libs/prx/libcairo/Context.cpp) cannot yet draw rectangles or consume the stored operator: paint, clip, stroke and fill exports remain throwing. The OVER-default operator preserves save/restore state, and rectangle paths use quantized device displacements and close-path canonicalization. Native Cairo 1.18 is the comparison target; PS5 firmware behavior is unmeasured.
 
 ### Functional font options
-
 - [FontOptions.cpp](../../../core/libs/prx/libcairo/FontOptions.cpp) implements eight font-option lifecycle, antialias and hint-setting helpers with Cairo-compatible owned state and a protected nil object. Tested on Windows and Linux sanitizers.
-
 ### Callable exports
-
-
 - [Callable exports](../../../core/libs/prx/libcairo/Export.cpp) - 75 NIDs still throw; the table below also lists the exports `Context.cpp`, `FontOptions.cpp`, `Matrix.cpp` and `Surface.cpp` implement. The map matches the [public 3.20 catalogue](https://github.com/DNNDHH/PS5-3.20_Libs/blob/b2a77c09cd71c01f34c790cfbe98c751a13262ad/libcairo.c) and [selected export metadata](https://gist.github.com/kyon-eth/a0bb48f2b3070a5eac8a638810f195f2/a3838ac54ebcc0bbfeb3cc46002a9a2dcce4dbdc) from two version-labelled images (SHA-256 `ec2158e0c5875316d200037d7f4bc48861626451752523f6930d687307c75ef8`). The labels are not authenticated. Prototypes and behaviour of the remaining declarations are unverified; they throw through `NotImplemented_nid_no_patch`.
-
+- [Callable exports](../../../core/libs/prx/libcairo/Export.cpp) - 83 NIDs still throw; the complete table below also includes implemented exports. The map matches the [public 3.20 catalogue](https://github.com/DNNDHH/PS5-3.20_Libs/blob/b2a77c09cd71c01f34c790cfbe98c751a13262ad/libcairo.c) and [selected export metadata](https://gist.github.com/kyon-eth/a0bb48f2b3070a5eac8a638810f195f2/a3838ac54ebcc46002a9a2dcce4dbdc) from two version-labelled images (SHA-256 `ec2158e0c5875316d200037d7f4bc48861626451752523f6930d687307c75ef8`). The labels are not authenticated; unsupported functions still throw through `NotImplemented_nid_no_patch`, and their prototypes and behavior remain unverified.
 
 | Name | NID |
 | --- | --- |
