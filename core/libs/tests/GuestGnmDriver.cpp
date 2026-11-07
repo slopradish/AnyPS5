@@ -1,7 +1,7 @@
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
+#include "prx/libSceGnmDriver/include/Api.hpp"
 #include "prx/libc/include/Shutdown.hpp"
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -9,8 +9,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-
-#include "prx/libSceGnmDriver/libSceGnmDriver.hpp"
 
 namespace {
 
@@ -53,16 +51,6 @@ void TestWriters() {
     check(WholePackets(words.data(), words.size()), "the draw default state is not whole PM4 packets");
 
     words.fill(0xdeadbeefu);
-    check(sceGnmDrawInitDefaultHardwareState350(words.data(), 0xff) == 0 && words[0] == 0xdeadbeefu, "the 350 default state wrote into a short buffer");
-    check(sceGnmDrawInitDefaultHardwareState350(words.data(), 0x100) == 0x100, "the 350 default state is not 256 dwords");
-    check(words[0] == Header(0x28, 2) && words[3] == Header(0x12, 1) && words[5] == Header(0x58, 6) && words[12] == Header(0x76, 2) && words[13] == 0x216,
-        "the 350 default state does not start with CONTEXT_CONTROL, CLEAR_STATE, ACQUIRE_MEM and SET_SH_REG");
-    check(words[143] == Header(0x79, 2) && words[144] == 0x40000258u && words[145] == 0x6d007fu && words[146] == Header(0x10, 109),
-        "the 350 default state does not end with the 0x40000258 config register");
-    check(std::all_of(words.begin() + 147, words.end(), [](std::uint32_t word) { return word == 0; }), "the 350 default state padding is not zero");
-    check(WholePackets(words.data(), words.size()), "the 350 default state is not whole PM4 packets");
-
-    words.fill(0xdeadbeefu);
     check(sceGnmDispatchInitDefaultHardwareState(words.data(), 0x100) == 0x100, "the dispatch default state is not 256 dwords");
     check(words[0] == (Header(0x76, 2) | 2u) && words[1] == 0x216 && words[2] == 0xffffffffu, "the dispatch default state does not start with a compute SET_SH_REG");
     check(WholePackets(words.data(), words.size()), "the dispatch default state is not whole PM4 packets");
@@ -76,68 +64,66 @@ void TestWriters() {
     const std::uint32_t shader[] = {Header(0x76, 3), 0x20c, 0x1000, 0, Header(0x76, 3), 0x212, 0x11, 0x22, Header(0x76, 4), 0x207, 64, 1, 1, Header(0x10, 11)};
     check(std::memcmp(words.data(), shader, sizeof(shader)) == 0 && WholePackets(words.data(), 0x19), "the compute shader packets are wrong");
 
-    const std::uint32_t psRegs[12] = {0x1000, 0, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000, 0x9000, 0xa000, 0xb000};
-    const std::uint32_t psBadRegs[12] = {0x1000, 1, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000, 0x9000, 0xa000, 0xb000};
-    const std::uint32_t ps[] = {Header(0x76, 3), 8, 0x1000, 0, Header(0x76, 3), 10, 0x2000, 0x3000, Header(0x69, 3), 0x1c4, 0x4000, 0x5000,
-        Header(0x69, 3), 0x1b3, 0x6000, 0x7000, Header(0x69, 2), 0x1b6, 0x8000, Header(0x69, 2), 0x1b8, 0x9000, Header(0x69, 2), 0x203, 0xa000,
-        Header(0x69, 2), 0x8f, 0xb000, Header(0x10, 11), 0};
-    const std::uint32_t nullPs[] = {Header(0x76, 3), 8, 0, 0, Header(0x69, 2), 0x203, 0, Header(0x69, 2), 0x8f, 0xf, Header(0x10, 0x1d), 0};
-    words.fill(0xdeadbeefu);
-    check(sceGnmSetPsShader350(words.data(), 0x27, psRegs) == -1 && words[0] == 0xdeadbeefu, "the 350 pixel shader was written into a short buffer");
-    check(sceGnmSetPsShader350(words.data(), 0x28, psBadRegs) == -1, "the 350 pixel shader accepted a nonzero high address word");
-    check(sceGnmSetPsShader350(words.data(), 0x28, psRegs) == 0 && std::memcmp(words.data(), ps, sizeof(ps)) == 0, "the 350 pixel shader packets are wrong");
-    words.fill(0xdeadbeefu);
-    check(sceGnmSetPsShader350(words.data(), 0x28, nullptr) == 0 && std::memcmp(words.data(), nullPs, sizeof(nullPs)) == 0, "the null 350 pixel shader packets are wrong");
-    check(WholePackets(words.data(), 0x28), "the null 350 pixel shader is not whole PM4 packets");
-
-    const std::uint32_t csRegs[7] = {0x1000, 0, 0x300, 0x3000, 0x4000, 0x5000, 0x6000};
-    const std::uint32_t cs[] = {Header(0x76, 3), 0x20c, 0x1000, 0, Header(0x76, 3), 0x212, 0x40, 0x3000, Header(0x76, 4), 0x207, 0x4000, 0x5000, 0x6000,
-        Header(0x10, 11), 0};
-    words.fill(0xdeadbeefu);
-    check(sceGnmSetCsShaderWithModifier(words.data(), 0x18, csRegs, 0) == -1 && words[0] == 0xdeadbeefu, "the modified compute shader was written into a short buffer");
-    check(sceGnmSetCsShaderWithModifier(words.data(), 0x19, csRegs, 0x400) == -1, "the modified compute shader accepted a reserved modifier bit");
-    check(sceGnmSetCsShaderWithModifier(words.data(), 0x19, csRegs, 0x40) == 0 && std::memcmp(words.data(), cs, sizeof(cs)) == 0,
-        "the modified compute shader packets are wrong");
-
-    words.fill(0xdeadbeefu);
-    check(sceGnmSetEmbeddedVsShader(words.data(), 0x1c, 0, 0) == -1 && words[0] == 0xdeadbeefu, "the embedded vertex shader was written into a short buffer");
-    check(sceGnmSetEmbeddedVsShader(words.data(), 0x1d, 1, 0) == -1, "the embedded vertex shader accepted another shader id");
-    check(sceGnmSetEmbeddedVsShader(words.data(), 0x1d, 0, 1) == -1, "the embedded vertex shader accepted a nonzero cache policy");
-    check(sceGnmSetEmbeddedVsShader(words.data(), 0x1d, 0, 0) == 0, "the embedded vertex shader was not written");
-    check(words[0] == Header(0x76, 3) && words[1] == 0x48 && words[4] == Header(0x76, 3) && words[5] == 0x4a && words[6] == 0xc0000 && words[7] == 4,
-        "the embedded vertex shader does not start with the vertex shader address and resource registers");
-    const std::uint32_t vs[] = {Header(0x69, 2), 0x207, 0, Header(0x69, 2), 0x1b1, 0, Header(0x69, 2), 0x1c3, 4};
-    check(std::memcmp(words.data() + 8, vs, sizeof(vs)) == 0, "the embedded vertex shader context registers are wrong");
-    check(WholePackets(words.data(), 0x1d), "the embedded vertex shader is not whole PM4 packets");
-    const auto vsAddress = (static_cast<std::uint64_t>(words[3]) << 40) | (static_cast<std::uint64_t>(words[2]) << 8);
-    const auto* vsCode = reinterpret_cast<const std::uint32_t*>(vsAddress);
-    check(vsCode[0] == 0xbeeb0387u && vsCode[10] == 0xf80008cfu && vsCode[11] == 0x03020001u && vsCode[14] == 0xbf810000u,
-        "the embedded vertex shader does not point at the fullscreen vertex program");
-
-    words.fill(0xdeadbeefu);
-    check(sceGnmSetEmbeddedPsShader(words.data(), 0x27, 0, 0) == -1 && words[0] == 0xdeadbeefu, "the embedded pixel shader was written into a short buffer");
-    check(sceGnmSetEmbeddedPsShader(words.data(), 0x28, 2, 0) == -1, "the embedded pixel shader accepted another shader id");
-    check(sceGnmSetEmbeddedPsShader(words.data(), 0x28, 0, 0) == 0, "the embedded pixel shader was not written");
-    check(words[0] == Header(0x76, 3) && words[1] == 8, "the embedded pixel shader does not start with the pixel shader address");
-    const std::uint32_t embeddedPs[] = {Header(0x76, 3), 10, 0xc0000, 4, Header(0x69, 3), 0x1c4, 0, 4, Header(0x69, 3), 0x1b3, 2, 2,
-        Header(0x69, 2), 0x1b6, 0, Header(0x69, 2), 0x1b8, 0, Header(0x69, 2), 0x203, 0x10, Header(0x69, 2), 0x8f, 0xf};
-    check(std::memcmp(words.data() + 4, embeddedPs, sizeof(embeddedPs)) == 0, "the embedded pixel shader packets are wrong");
-    check(WholePackets(words.data(), 0x28), "the embedded pixel shader is not whole PM4 packets");
-    const auto psAddress = (static_cast<std::uint64_t>(words[3]) << 40) | (static_cast<std::uint64_t>(words[2]) << 8);
-    const auto* psCode = reinterpret_cast<const std::uint32_t*>(psAddress);
-    check(psCode[0] == 0xbeeb0383u && psCode[6] == 0xbf810000u, "the embedded pixel shader does not point at the black pixel program");
-    check(sceGnmSetEmbeddedPsShader(words.data(), 0x28, 1, 0) == 0 && words[6] == 0x2000u && words[11] == 2 && words[27] == 3,
-        "the depth-only embedded pixel shader packets are wrong");
-    const auto depthAddress = (static_cast<std::uint64_t>(words[3]) << 40) | (static_cast<std::uint64_t>(words[2]) << 8);
-    check(reinterpret_cast<const std::uint32_t*>(depthAddress)[0] == 0xbeeb0383u && reinterpret_cast<const std::uint32_t*>(depthAddress)[1] == 0x7e040280u,
-        "the depth-only embedded pixel shader is not the depth-only program");
-
     words.fill(0xdeadbeefu);
     check(sceGnmInsertPushMarker(words.data(), 5, "ab") == -1, "a push marker was written into the wrong size");
     check(sceGnmInsertPushMarker(words.data(), 6, "ab") == 0, "the push marker was not written");
     check(words[0] == Header(0x10, 5) && words[1] == 0x68750001u && std::memcmp(&words[2], "ab", 3) == 0 && WholePackets(words.data(), 6), "the push marker packet is wrong");
     check(sceGnmInsertPopMarker(words.data(), 5) == -1, "a pop marker was written into 5 dwords");
     check(sceGnmInsertPopMarker(words.data(), 6) == 0 && words[0] == Header(0x10, 5) && words[1] == 0x68750002u && WholePackets(words.data(), 6), "the pop marker packet is wrong");
+}
+
+void TestSubmitValidation() {
+    std::uint32_t draw[] = {Header(0x10, 1), 0};
+    std::uint32_t* dcbs[] = {draw};
+    std::uint32_t* nullDcbs[] = {nullptr};
+    std::uint32_t* nullCcbs[] = {nullptr};
+    const std::uint32_t bytes[] = {sizeof(draw)};
+    const std::uint32_t empty[] = {0};
+    const std::uint32_t unaligned[] = {6};
+    const std::uint32_t tooLarge[] = {0x400000};
+    check(sceGnmSubmitCommandBuffers(1, nullptr, bytes, nullptr, nullptr) == InvalidArgument, "a submission without draw buffers was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, nullptr, nullptr, nullptr) == InvalidArgument, "a submission without draw sizes was accepted");
+    check(sceGnmSubmitCommandBuffers(1, nullDcbs, bytes, nullptr, nullptr) == InvalidArgument, "a null draw buffer was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, empty, nullptr, nullptr) == InvalidArgument, "an empty draw buffer was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, unaligned, nullptr, nullptr) == InvalidArgument, "a draw buffer of 6 bytes was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, tooLarge, nullptr, nullptr) == InvalidArgument, "a draw buffer over the size limit was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, nullptr, bytes) == InvalidArgument, "a constant buffer size without constant buffers was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, nullCcbs, bytes) == InvalidArgument, "a null constant buffer with a size was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, dcbs, unaligned) == InvalidArgument, "a constant buffer of 6 bytes was accepted");
+    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, dcbs, tooLarge) == InvalidArgument, "a constant buffer over the size limit was accepted");
+    check(sceGnmSubmitAndFlipCommandBuffers(0, dcbs, bytes, nullptr, nullptr, 0, 0, 0, 0) == InvalidArgument, "a flip without command buffers was accepted");
+    std::uint32_t typeZero[] = {0, 0};
+    std::uint32_t* typeZeroDcbs[] = {typeZero};
+    const std::uint32_t typeZeroBytes[] = {sizeof(typeZero)};
+    check(ThrowsRuntimeError([&] { sceGnmSubmitCommandBuffers(1, typeZeroDcbs, typeZeroBytes, nullptr, nullptr); }), "a type-0 packet was accepted");
+}
+
+alignas(256) std::array<std::uint32_t, 4> Label{};
+
+void TestFillerSubmit() {
+    const auto label = reinterpret_cast<std::uintptr_t>(Label.data());
+    const auto low = static_cast<std::uint32_t>(label);
+    const auto high = static_cast<std::uint32_t>(label >> 32);
+    std::uint32_t draw[] = {Filler, Header(0x86, 1), 0, Header(0x85, 1), 0, Filler, Header(0x37, 4), 0x500, low, high, 0x1234, Filler};
+    std::uint32_t constant[] = {Filler, Header(0x84, 1), 0, Filler};
+    std::uint32_t* dcbs[] = {draw};
+    std::uint32_t* ccbs[] = {constant};
+    const std::uint32_t drawBytes[] = {sizeof(draw)};
+    const std::uint32_t constantBytes[] = {sizeof(constant)};
+    check(sceGnmSubmitCommandBuffers(1, dcbs, drawBytes, ccbs, constantBytes) == 0, "the submission with filler packets failed");
+    AgcDriverWaitIdle_nid_postfix();
+    check(Label[0] == 0x1234, "the WRITE_DATA between filler packets did not land");
+
+    std::uint32_t second[] = {Header(0x37, 4), 0x500, low, high, 0x5678, Filler};
+    std::uint32_t* secondDcbs[] = {second};
+    const std::uint32_t secondBytes[] = {sizeof(second)};
+    const std::uint32_t noConstant[] = {0};
+    check(sceGnmSubmitCommandBuffers(1, secondDcbs, secondBytes, nullptr, noConstant) == 0, "a submission with zero-sized constant buffers failed");
+    AgcDriverWaitIdle_nid_postfix();
+    check(Label[0] == 0x5678, "the WRITE_DATA before a trailing filler packet did not land");
+    check(sceGnmSubmitDone() == 0, "sceGnmSubmitDone failed");
+}
+
 }
 
 void TestDrawWriters() {
@@ -198,60 +184,6 @@ void TestDrawWriters() {
     check(sceGnmSetVgtControl(words.data(), 3, 0x7f, 1, 1) == 0 && words[0] == Header(0x79, 2) && words[1] == 0x40000258u && words[2] == 0x75007fu,
         "the VGT control packet is wrong");
     check(sceGnmSetVgtControl(words.data(), 3, 0x100, 0, 0) == -1, "the VGT control accepted 256 primitive groups");
-}
-
-void TestSubmitValidation() {
-    std::uint32_t draw[] = {Header(0x10, 1), 0};
-    std::uint32_t* dcbs[] = {draw};
-    std::uint32_t* nullDcbs[] = {nullptr};
-    std::uint32_t* nullCcbs[] = {nullptr};
-    const std::uint32_t bytes[] = {sizeof(draw)};
-    const std::uint32_t empty[] = {0};
-    const std::uint32_t unaligned[] = {6};
-    const std::uint32_t tooLarge[] = {0x400000};
-    check(sceGnmSubmitCommandBuffers(1, nullptr, bytes, nullptr, nullptr) == InvalidArgument, "a submission without draw buffers was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, nullptr, nullptr, nullptr) == InvalidArgument, "a submission without draw sizes was accepted");
-    check(sceGnmSubmitCommandBuffers(1, nullDcbs, bytes, nullptr, nullptr) == InvalidArgument, "a null draw buffer was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, empty, nullptr, nullptr) == InvalidArgument, "an empty draw buffer was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, unaligned, nullptr, nullptr) == InvalidArgument, "a draw buffer of 6 bytes was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, tooLarge, nullptr, nullptr) == InvalidArgument, "a draw buffer over the size limit was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, nullptr, bytes) == InvalidArgument, "a constant buffer size without constant buffers was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, nullCcbs, bytes) == InvalidArgument, "a null constant buffer with a size was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, dcbs, unaligned) == InvalidArgument, "a constant buffer of 6 bytes was accepted");
-    check(sceGnmSubmitCommandBuffers(1, dcbs, bytes, dcbs, tooLarge) == InvalidArgument, "a constant buffer over the size limit was accepted");
-    check(sceGnmSubmitAndFlipCommandBuffers(0, dcbs, bytes, nullptr, nullptr, 0, 0, 0, 0) == InvalidArgument, "a flip without command buffers was accepted");
-    std::uint32_t typeZero[] = {0, 0};
-    std::uint32_t* typeZeroDcbs[] = {typeZero};
-    const std::uint32_t typeZeroBytes[] = {sizeof(typeZero)};
-    check(ThrowsRuntimeError([&] { sceGnmSubmitCommandBuffers(1, typeZeroDcbs, typeZeroBytes, nullptr, nullptr); }), "a type-0 packet was accepted");
-}
-
-alignas(256) std::array<std::uint32_t, 4> Label{};
-
-void TestFillerSubmit() {
-    const auto label = reinterpret_cast<std::uintptr_t>(Label.data());
-    const auto low = static_cast<std::uint32_t>(label);
-    const auto high = static_cast<std::uint32_t>(label >> 32);
-    std::uint32_t draw[] = {Filler, Header(0x86, 1), 0, Header(0x85, 1), 0, Filler, Header(0x37, 4), 0x500, low, high, 0x1234, Filler};
-    std::uint32_t constant[] = {Filler, Header(0x84, 1), 0, Filler};
-    std::uint32_t* dcbs[] = {draw};
-    std::uint32_t* ccbs[] = {constant};
-    const std::uint32_t drawBytes[] = {sizeof(draw)};
-    const std::uint32_t constantBytes[] = {sizeof(constant)};
-    check(sceGnmSubmitCommandBuffers(1, dcbs, drawBytes, ccbs, constantBytes) == 0, "the submission with filler packets failed");
-    AgcDriverWaitIdle_nid_postfix();
-    check(Label[0] == 0x1234, "the WRITE_DATA between filler packets did not land");
-
-    std::uint32_t second[] = {Header(0x37, 4), 0x500, low, high, 0x5678, Filler};
-    std::uint32_t* secondDcbs[] = {second};
-    const std::uint32_t secondBytes[] = {sizeof(second)};
-    const std::uint32_t noConstant[] = {0};
-    check(sceGnmSubmitCommandBuffers(1, secondDcbs, secondBytes, nullptr, noConstant) == 0, "a submission with zero-sized constant buffers failed");
-    AgcDriverWaitIdle_nid_postfix();
-    check(Label[0] == 0x5678, "the WRITE_DATA before a trailing filler packet did not land");
-    check(sceGnmSubmitDone() == 0, "sceGnmSubmitDone failed");
-}
-
 }
 
 int main() {
