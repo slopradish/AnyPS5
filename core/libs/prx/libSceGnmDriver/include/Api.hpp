@@ -50,5 +50,15 @@ int APS5_VABI sceGnmRequestMipStatsReportAndReset();
 int APS5_VABI sceGnmSetGsRingSizes();
 int APS5_VABI sceGnmSetupMipStatsReport();
 int APS5_VABI sceGnmUnmapComputeQueue();
+int APS5_VABI sceGnmDrawIndex(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint64_t indexAddress, std::uint32_t flags, std::uint32_t);
+int APS5_VABI sceGnmDrawIndexAuto(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexCount, std::uint32_t flags);
+int APS5_VABI sceGnmDrawIndexOffset(std::uint32_t* cmd, std::uint32_t size, std::uint32_t indexOffset, std::uint32_t indexCount, std::uint32_t flags);
+int APS5_VABI sceGnmDrawIndexIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags);
+int APS5_VABI sceGnmDrawIndexIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags);
+int APS5_VABI sceGnmDrawIndirect(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags);
+int APS5_VABI sceGnmDrawIndirectMulti(std::uint32_t* cmd, std::uint32_t size, std::uint32_t dataOffset, std::uint32_t maxCount, std::uint32_t stage, std::uint32_t vertexSgpr, std::uint32_t instanceSgpr, std::uint32_t flags);
+int APS5_VABI sceGnmDrawInitToDefaultContextState(std::uint32_t* cmd, std::uint32_t size);
+int APS5_VABI sceGnmResetVgtControl(std::uint32_t* cmd, std::uint32_t size);
+int APS5_VABI sceGnmSetVgtControl(std::uint32_t* cmd, std::uint32_t size, std::uint32_t primGroupSizeMinusOne, std::uint32_t partialVsWaveMode, std::uint32_t switchOnlyOnEop);
 
 }
