@@ -157,6 +157,36 @@ void CheckDashValidationAndStress() {
     assert(cairo_get_dash_count(normalized) == 2);
     cairo_get_dash(normalized, mergedGaps.data(), nullptr);
     assert((mergedGaps == std::array<double, 2>{0, 3}));
+    const double tinyGap[] = {2, 0.001};
+    cairo_set_dash(normalized, tinyGap, 2, 1.5);
+    assert(cairo_get_dash_count(normalized) == 0);
+    const double twoTinyGaps[] = {2, 0.001, 2, 0.001};
+    cairo_set_dash(normalized, twoTinyGaps, 4, 1.5);
+    assert(cairo_get_dash_count(normalized) == 4);
+    std::array<double, 4> tinyGapsRetrieved{};
+    cairo_get_dash(normalized, tinyGapsRetrieved.data(), nullptr);
+    assert((tinyGapsRetrieved == std::array<double, 4>{2, 0.001, 2, 0.001}));
+    const double mergedTinyGap[] = {2, 0, 2, 0.001};
+    cairo_set_dash(normalized, mergedTinyGap, 4, -4);
+    assert(cairo_get_dash_count(normalized) == 0);
+    const double visibleGap[] = {2, 0.002};
+    cairo_set_dash(normalized, visibleGap, 2, 1.5);
+    assert(cairo_get_dash_count(normalized) == 2);
+    const std::array<double, 2> shortPeriod{0.00001, 0.002};
+    cairo_set_dash(normalized, shortPeriod.data(), 2, 8);
+    assert(cairo_get_dash_count(normalized) == 2);
+    std::array<double, 2> preservedShortPeriod{};
+    double preservedOffset = 0;
+    cairo_get_dash(normalized, preservedShortPeriod.data(), &preservedOffset);
+    assert(preservedShortPeriod == shortPeriod);
+    Near(preservedOffset, std::fmod(8, 0.00201));
+    const std::array<double, 4> shortMultisegmentPeriod{0, 0.002, 0.00001, 0.00001};
+    cairo_set_dash(normalized, shortMultisegmentPeriod.data(), 4, 8);
+    assert(cairo_get_dash_count(normalized) == 4);
+    std::array<double, 4> preservedSegments{};
+    cairo_get_dash(normalized, preservedSegments.data(), &preservedOffset);
+    assert(preservedSegments == shortMultisegmentPeriod);
+    Near(preservedOffset, std::fmod(8, 0.00202));
     cairo_destroy(normalized);
 }
 

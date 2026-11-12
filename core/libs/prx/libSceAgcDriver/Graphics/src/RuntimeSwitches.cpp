@@ -98,6 +98,8 @@ constexpr std::array<const char*, SwitchCount> SwitchNames{
     "APS5_DEFER_LABEL_READBACK",
     "APS5_DISPATCH_CACHE_LARGE",
     "APS5_RESOURCE_CACHE_LARGE",
+    "APS5_NO_GUARD_SPANS",
+    "APS5_NO_OWNED_DRAW_INPUTS",
 };
 
 struct SwitchValues {

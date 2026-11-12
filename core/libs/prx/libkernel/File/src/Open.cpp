@@ -54,9 +54,17 @@ static std::int64_t NativeLseek(int fd, std::int64_t offset, int whence) {
     const auto result = File::SeekSharedMemory_nid_no_patch(fd, offset, whence);
     if (result != -2) return result;
     const auto position = ::_lseeki64(fd, offset, whence);
-    if (position < 0 || GetFileType(reinterpret_cast<HANDLE>(::_get_osfhandle(fd))) != FILE_TYPE_PIPE) return position;
-    errno = ESPIPE;
-    return -1;
+    if (position < 0) return position;
+    const auto handle = WindowsDescriptorHandle_nid_no_patch(fd);
+    if (handle == INVALID_HANDLE_VALUE) {
+        errno = EBADF;
+        return -1;
+    }
+    if (GetFileType(handle) == FILE_TYPE_PIPE) {
+        errno = ESPIPE;
+        return -1;
+    }
+    return position;
 }
 static int NativeRead(int fd, void* buf, std::size_t n) {
     if (n > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
@@ -67,6 +75,10 @@ static int NativeRead(int fd, void* buf, std::size_t n) {
         return -1;
     }
     const auto positioned = File::LockPositionedTransfer(fd);
+    if (WindowsDescriptorHandle_nid_no_patch(fd) == INVALID_HANDLE_VALUE) {
+        errno = EBADF;
+        return -1;
+    }
     const int result = ::_read(fd, buf, static_cast<unsigned int>(n));
     if (result < 0 && _doserrno == ERROR_NO_DATA) errno = EAGAIN;
     return result;
@@ -86,6 +98,10 @@ static int NativeWrite(int fd, const void* buf, std::size_t n) {
     if (File::Appends(fd)) {
         const auto appended = File::WriteAtEnd(fd, buf, n);
         if (appended != -2) return static_cast<int>(appended);
+    }
+    if (WindowsDescriptorHandle_nid_no_patch(fd) == INVALID_HANDLE_VALUE) {
+        errno = EBADF;
+        return -1;
     }
     const int result = ::_write(fd, buf, static_cast<unsigned int>(n));
     if (result < 0 && errno == ENOSPC && _doserrno == 0 && ::GetFileType(reinterpret_cast<HANDLE>(::_get_osfhandle(fd))) == FILE_TYPE_PIPE) errno = EAGAIN;
@@ -210,6 +226,18 @@ static int SceIoErrorFromErrno(int error) {
     return static_cast<int>(0x80020000u | static_cast<unsigned>(guest));
 }
 
+#ifdef _WIN32
+static int CreationThroughSeparatorError(const std::filesystem::path& native, int flags) {
+    if ((flags & SCE_KERNEL_O_CREAT) == 0 || native.has_filename() || !native.has_relative_path()) return 0;
+    auto target = native;
+    while (!target.has_filename() && target.has_relative_path()) target = target.parent_path();
+    std::error_code error;
+    const auto status = std::filesystem::status(target, error);
+    if (status.type() == std::filesystem::file_type::not_found) return 2;
+    if (error) return FilesystemError(error);
+    return std::filesystem::is_directory(status) ? 0 : 20;
+}
+#endif
 static int OpenNative(const std::filesystem::path& native, int flags, std::uint16_t mode) {
     if (const auto archived = File::OpenArchivedFile(native, flags)) {
         if (*archived < 0) return SceErrorFromErrno(-*archived);
@@ -236,13 +264,23 @@ static int OpenNative(const std::filesystem::path& native, int flags, std::uint1
         }
 #endif
     }
+#ifdef _WIN32
+    const int separatorError = CreationThroughSeparatorError(native, flags);
+    if (separatorError != 0 && separatorError != 2) return SceKernelError(separatorError);
+    int fd = -1;
+    if (separatorError == 2) errno = ENOENT;
+    else fd = NativeOpen(native, MapFlags(flags), mode);
+#else
     int fd = NativeOpen(native, MapFlags(flags), mode);
+#endif
 #ifdef _WIN32
     if (fd < 0 && (errno != ENOENT || !native.has_filename())) {
         auto directory = native;
         while (!directory.has_filename() && directory.has_relative_path()) directory = directory.parent_path();
         std::error_code error;
-        if (std::filesystem::is_directory(directory, error)) {
+        std::error_code directoryPathError;
+        const auto directoryOpenPath = NativeMetadataPath(directory, directoryPathError);
+        if (std::filesystem::is_directory(directoryPathError ? directory : directoryOpenPath, error)) {
             if ((flags & (SCE_KERNEL_O_CREAT | SCE_KERNEL_O_EXCL)) == (SCE_KERNEL_O_CREAT | SCE_KERNEL_O_EXCL)) errno = EEXIST;
             else if ((flags & SCE_KERNEL_O_ACCMODE) != SCE_KERNEL_O_RDONLY || (flags & (SCE_KERNEL_O_CREAT | SCE_KERNEL_O_TRUNC))) errno = EISDIR;
             else fd = File::OpenDirectoryDescriptor(directory);

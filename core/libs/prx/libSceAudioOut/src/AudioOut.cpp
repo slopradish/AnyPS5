@@ -1,5 +1,7 @@
 #include "prx/libSceAudioOut/include/AudioOut.hpp"
+#include "prx/libSceAudioOut/include/OutputDevice.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -127,7 +129,6 @@ struct Port {
     SDL_AudioDeviceID device = 0;
     SDL_AudioSpec spec = {};
     HostGainRamp hostGain;
-    bool downmixStereo = false;
 };
 
 static std::mutex g_mutex;
@@ -146,6 +147,21 @@ static bool ensureSdlAudio() {
     return true;
 }
 
+static const char* selectedOutputDevice(const char* requested) {
+    if (requested == nullptr || *requested == '\0') return nullptr;
+    const int count = SDL_GetNumAudioDevices(0);
+    std::vector<std::string> names;
+    for (int index = 0; index < count; ++index) {
+        const char* name = SDL_GetAudioDeviceName(index, 0);
+        if (name != nullptr) names.emplace_back(name);
+    }
+    if (FindOutputDevice(names, requested)) return requested;
+    std::string listed;
+    for (const auto& name : names) listed += "\n  " + name;
+    APS5_LOG_OUT("AudioOut: ANYPS5_AUDIO_DEVICE '%s' is not an output device; using the default. Output devices:%s\n", requested, listed.c_str());
+    return nullptr;
+}
+
 static bool openDevice(Port& port) {
     if (!ensureSdlAudio() || SdlAudioReportsNoOutputEndpoint(SDL_GetCurrentAudioDriver(), SDL_GetNumAudioDevices(0))) {
         return false;
@@ -157,15 +173,11 @@ static bool openDevice(Port& port) {
     desired.samples = static_cast<Uint16>(port.samplesNum);
     desired.callback = nullptr;
     SDL_AudioSpec obtained{};
-    port.device = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, SDL_AUDIO_ALLOW_CHANNELS_CHANGE);
-    if (port.device == 0) port.device = SDL_OpenAudioDevice(nullptr, 0, &desired, &obtained, 0);
+    port.device = SDL_OpenAudioDevice(selectedOutputDevice(std::getenv("ANYPS5_AUDIO_DEVICE")), 0, &desired, &obtained, 0);
     if (port.device == 0) {
         return false;
     }
     port.spec = obtained;
-    port.downmixStereo = port.channels >= 6 && obtained.channels >= 1 && obtained.channels <= 2;
-    static const bool trace = std::getenv("APS5_TRACE_AUDIOOUT") != nullptr;
-    if (trace) std::fprintf(stderr, "[audioout] device %u: requested %d Hz %d ch fmt %d, obtained %d Hz %d ch fmt %d\n", port.device, desired.freq, desired.channels, static_cast<int>(desired.format), obtained.freq, obtained.channels, static_cast<int>(obtained.format));
     SDL_PauseAudioDevice(port.device, 0);
     return true;
 }
@@ -294,37 +306,6 @@ static void sleepUs(std::unique_lock<std::mutex>& lock, std::uint64_t us) {
     lock.lock();
 }
 
-static void downmixToStereo(const Port& port, const void* data, std::vector<std::uint8_t>& out) {
-    const auto frames = port.samplesNum;
-    const auto channels = static_cast<std::size_t>(port.channels);
-    constexpr float coefficient = 0.70710678f;
-    if (formatIsFloat(port.format)) {
-        const auto* source = static_cast<const float*>(data);
-        out.resize(static_cast<std::size_t>(frames) * 2u * sizeof(float));
-        auto* destination = reinterpret_cast<float*>(out.data());
-        for (std::uint32_t frame = 0; frame < frames; ++frame) {
-            const auto offset = static_cast<std::size_t>(frame) * channels;
-            const float center = channels > 2 ? source[offset + 2] : 0.0f;
-            const float surroundLeft = channels > 7 ? source[offset + 4] + source[offset + 6] : source[offset + 4];
-            const float surroundRight = channels > 7 ? source[offset + 5] + source[offset + 7] : source[offset + 5];
-            destination[frame * 2] = source[offset] + coefficient * center + coefficient * surroundLeft;
-            destination[frame * 2 + 1] = source[offset + 1] + coefficient * center + coefficient * surroundRight;
-        }
-        return;
-    }
-    const auto* source = static_cast<const std::int16_t*>(data);
-    out.resize(static_cast<std::size_t>(frames) * 2u * sizeof(std::int16_t));
-    auto* destination = reinterpret_cast<std::int16_t*>(out.data());
-    for (std::uint32_t frame = 0; frame < frames; ++frame) {
-        const auto offset = static_cast<std::size_t>(frame) * channels;
-        const float center = channels > 2 ? source[offset + 2] : 0.0f;
-        const float surroundLeft = channels > 7 ? source[offset + 4] + source[offset + 6] : source[offset + 4];
-        const float surroundRight = channels > 7 ? source[offset + 5] + source[offset + 7] : source[offset + 5];
-        destination[frame * 2] = static_cast<std::int16_t>(std::clamp(source[offset] + coefficient * center + coefficient * surroundLeft, -32768.0f, 32767.0f));
-        destination[frame * 2 + 1] = static_cast<std::int16_t>(std::clamp(source[offset + 1] + coefficient * center + coefficient * surroundRight, -32768.0f, 32767.0f));
-    }
-}
-
 static void queueAudio(Port& port, const void* data, std::unique_lock<std::mutex>& lock) {
     if (data == nullptr) {
         const std::uint64_t waitStart = sceKernelGetProcessTime();
@@ -349,28 +330,9 @@ static void queueAudio(Port& port, const void* data, std::unique_lock<std::mutex
         AudioOut2WritePadFrames(pad.data(), port.padLayout, padFrames.data(), port.samplesNum, Pad::RumblePercent());
         queueData = padFrames.data();
     } else {
-        const void* prepared = prepareBuffer(port, data, prepareBuf);
-        std::vector<std::uint8_t> downmixBuf;
-        std::vector<std::uint8_t> gainBuf;
-        if (port.downmixStereo) {
-            downmixToStereo(port, prepared, downmixBuf);
-            prepared = downmixBuf.data();
-        }
-        const auto channels = port.downmixStereo ? 2u : static_cast<unsigned>(port.channels);
-        queueData = HostGainFilter(port.hostGain, HostVolumeGain_nid_no_patch(), prepared, formatIsFloat(port.format), port.samplesNum, channels, gainBuf);
-        queueSize = checkedBufferSize(port.samplesNum, channels, bytesPerSample(port.format));
-    }
-
-    static const char* dumpPath = std::getenv("APS5_DUMP_AUDIO_OUT");
-    if (dumpPath != nullptr && port.type == PORT_TYPE_MAIN) {
-        static std::FILE* dump = nullptr;
-        static std::uint64_t written = 0;
-        const auto bytesPerFrame = static_cast<std::uint64_t>(queueSize) / port.samplesNum;
-        if (dump == nullptr) dump = std::fopen(dumpPath, "wb");
-        if (dump != nullptr && written < static_cast<std::uint64_t>(port.freq) * 60ull * bytesPerFrame) {
-            std::fwrite(queueData, 1, queueSize, dump);
-            written += queueSize;
-        }
+        queueData = prepareBuffer(port, data, prepareBuf);
+        queueData = HostGainFilter(port.hostGain, HostVolumeGain_nid_no_patch(), queueData, formatIsFloat(port.format), port.samplesNum, static_cast<unsigned>(port.channels), prepareBuf);
+        queueSize = checkedBufferSize(port.samplesNum, static_cast<std::uint32_t>(port.channels), bytesPerSample(port.format));
     }
 
     const std::uint64_t bufferUs = port.freq != 0
@@ -440,8 +402,9 @@ static bool portTypeValid(int type) {
 }
 
 static Port* getPort(int handle) {
+    if (handle <= 0 || handle > PORTS_MAX) return nullptr;
     const int idx = handle - 1;
-    if (idx < 0 || idx >= PORTS_MAX || !g_ports[idx].used) {
+    if (!g_ports[idx].used) {
         return nullptr;
     }
     return &g_ports[idx];
@@ -498,6 +461,10 @@ void AudioOut2MarkInitialized_nid_no_patch() {
     g_audioOut2Initialized.store(true);
 }
 
+bool AudioOut2TryInitialize_nid_no_patch() {
+    return !g_audioOut2Initialized.exchange(true);
+}
+
 extern "C" {
 
 int APS5_VABI sceAudioOut2Initialize(void) {
@@ -513,6 +480,7 @@ int APS5_VABI sceAudioOutInit() {
 int APS5_VABI sceAudioOutOpen(int userId, int type, int index, std::uint32_t len,
     std::uint32_t freq, std::uint32_t param) {
     (void)userId;
+    (void)index;
     if (!portTypeValid(type)) {
         return -2144993270;
     }
@@ -521,9 +489,6 @@ int APS5_VABI sceAudioOutOpen(int userId, int type, int index, std::uint32_t len
     }
     if (freq == 0) {
         return -2144993272;
-    }
-    if (index != 0) {
-        throw std::runtime_error("sceAudioOutOpen: index != 0 not supported");
     }
 
     Format format = Format::Unknown;
